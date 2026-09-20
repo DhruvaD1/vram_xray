@@ -147,6 +147,18 @@ def cmd_analyze(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(a: argparse.Namespace) -> int:
+    import runpy
+
+    import vramxray
+
+    vramxray.watch(stacks=a.stacks, report_dir=a.report_dir)
+    sys.argv = [a.script, *a.args]
+    sys.path.insert(0, str(__import__("pathlib").Path(a.script).resolve().parent))
+    runpy.run_path(a.script, run_name="__main__")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="vramxray", description="See the GPU memory PyTorch can't show you."
@@ -164,6 +176,12 @@ def main(argv: list[str] | None = None) -> int:
     an.add_argument("--top", type=int, default=8)
     an.add_argument("--json")
     an.set_defaults(fn=cmd_analyze)
+    rn = sub.add_parser("run", help="run a script with vramxray.watch() already on")
+    rn.add_argument("script")
+    rn.add_argument("args", nargs=argparse.REMAINDER)
+    rn.add_argument("--stacks", choices=["python", "all"], help="record allocation stacks")
+    rn.add_argument("--report-dir")
+    rn.set_defaults(fn=cmd_run)
     a = p.parse_args(argv)
     return a.fn(a)
 
