@@ -1,10 +1,3 @@
-"""Pure Python live mode: no compiled code, works on any torch since 2.5.
-
-torch lets Python register an out-of-memory observer. It fires inside the failing allocation,
-after the allocator has dropped its lock, so taking a snapshot there is safe. We combine that
-snapshot with an NVML read and print the report before the exception reaches the user.
-"""
-
 from __future__ import annotations
 
 import os
@@ -30,6 +23,8 @@ class Watcher:
         report_dir: str | None = None,
         on_report: Callable[[Report], None] | None = None,
         quiet: bool = False,
+        mode: str = "auto",
+        cupti: str | bool = "auto",
     ) -> None:
         self.stacks = stacks
         self.max_entries = max_entries
@@ -42,6 +37,10 @@ class Watcher:
         self.samplers: dict[int, Sampler] = {}
         self.uuids: dict[int, str | None] = {}
         self.reports: list[Report] = []
+        self.mode = mode
+        self.cupti = cupti
+        self.native = None
+        self.cupti_rc: int | None = None
         self._last: tuple[int, int, float] | None = None
         self._lock = threading.Lock()
         self._installed = False
@@ -51,6 +50,27 @@ class Watcher:
 
         if self._installed:
             return self
+        if self.mode in ("auto", "native"):
+            from .native import load
+
+            self.native = load()
+            if self.native is None and self.mode == "native":
+                raise RuntimeError(
+                    "vramxray: native mode requested but the extension did not build"
+                )
+        # subscribe before the context exists so torch's own kernel images get counted too
+        if self.native is not None and self.cupti in ("auto", True):
+            self.cupti_rc = self.native.cupti_start()
+            if self.cupti_rc != 0 and not self.quiet:
+                why = (
+                    "torch.profiler or another tool holds it"
+                    if self.cupti_rc == 39
+                    else f"error {self.cupti_rc}"
+                )
+                print(
+                    f"vramxray: CUPTI unavailable ({why}); libraries will not be named",
+                    file=sys.stderr,
+                )
         already_up = torch.cuda.is_initialized()
         before = {} if already_up else {d: self.nvml.memory(d) for d in range(_count())}
         torch.cuda.init()
@@ -79,6 +99,8 @@ class Watcher:
                 self.baseline[d] = max(own - torch.cuda.memory_reserved(d), 0)
             else:
                 self.baseline[d] = -1  # unknown
+        if self.native is not None:
+            self.native.install()
         if self.stacks:
             torch.cuda.memory._record_memory_history(
                 enabled="all", stacks=self.stacks, max_entries=self.max_entries
@@ -137,20 +159,45 @@ class Watcher:
         nvml = self.nvml.memory(device, self.uuids.get(device))
         if allowed_max is not None and nvml is not None and allowed_max >= nvml.total:
             allowed_max = None  # torch passes device_total when no fraction is set
-        others = [
-            p for p in self.nvml.processes(device, self.uuids.get(device)) if p.pid != os.getpid()
-        ]
+        procs = self.nvml.processes(device, self.uuids.get(device))
+        others = [p for p in procs if p.pid != os.getpid()]
+        libs, images = self._native_buckets()
         acc: Accounting = reconcile(
             nvml,
             reserved,
             allocated,
-            self.baseline.get(device, 0),
+            self.baseline.get(device, -1),
+            libs=libs,
+            images_by_lib=images,
             other_processes=others,
+            processes_known=any(p.used is not None for p in procs),
             allowed_max=allowed_max,
         )
         rep = Report(device, ex, acc, suggest(ex, acc), request, _rank(), torch.__version__)
         self.reports.append(rep)
         return rep
+
+    def _native_buckets(self) -> tuple[dict[str, int], dict[str, int]]:
+        """Live bytes and kernel-image bytes per library. torch's own rows are dropped because
+        torch_reserved already counts them."""
+        if self.native is None:
+            return {}, {}
+        own = ("libc10_cuda", "libtorch", "torch")
+        libs = {k: v for k, v in self.native.libs().items() if not k.startswith(own) and v}
+        images = {k: v for k, v in self.native.kernel_images().items() if v}
+        return libs, images
+
+    def release_cupti(self) -> None:
+        """Give the CUPTI subscription back, for example before a torch.profiler session."""
+        if self.native is not None:
+            self.native.cupti_stop()
+
+    def timeline(self):
+        from .timeline import Timeline
+
+        if self.native is None:
+            raise RuntimeError("timeline needs native mode")
+        return Timeline(self.native.drain())
 
 
 def _count() -> int:

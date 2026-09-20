@@ -1,5 +1,3 @@
-"""The thing the user actually reads: one report, as text or JSON."""
-
 from __future__ import annotations
 
 import json
@@ -47,7 +45,7 @@ class Report:
                 "torch_allocated": acc.torch_allocated,
                 "baseline": acc.baseline,
                 "libs": acc.libs,
-                "kernel_images": acc.kernel_images,
+                "kernel_images": acc.images_by_lib,
                 "other_processes": [(p.pid, p.used) for p in acc.other_processes],
                 "allowed_max": acc.allowed_max,
                 "unattributed": acc.unattributed,
@@ -106,7 +104,10 @@ def render(r: Report) -> str:
         for name, size in sorted(acc.libs.items(), key=lambda kv: -kv[1]):
             lines.append(_row(name, size))
         if acc.kernel_images:
-            lines.append(_row("kernel images", acc.kernel_images))
+            top = sorted(acc.images_by_lib.items(), key=lambda kv: -kv[1])[:3]
+            lines.append(
+                _row("kernel images", acc.kernel_images, ", ".join(f"{k} {b(v)}" for k, v in top))
+            )
         if acc.context_known:
             lines.append(_row("CUDA context", acc.baseline, "measured across torch.cuda.init()"))
         if acc.other_processes:

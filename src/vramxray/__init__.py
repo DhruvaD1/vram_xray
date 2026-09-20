@@ -18,17 +18,34 @@ def watch(
     report_dir: str | None = None,
     quiet: bool = False,
     on_report=None,
+    mode: str = "auto",
+    cupti: str | bool = "auto",
 ):
-    """Start watching. Call once, before or after CUDA is initialized.
+    """Start watching. Best called before the first CUDA call, but works after too.
 
     stacks: None (cheapest), "python", or "all" (python + C++ frames) for allocation stacks.
+    mode: "auto" uses the C++ core when it builds, "python" never tries, "native" insists.
+    cupti: whether to name the libraries behind non-torch memory; conflicts with torch.profiler.
     """
     global _watcher
     if _watcher is None:
         from .hooks_py import Watcher
 
-        _watcher = Watcher(stacks, max_entries, interval_ms, report_dir, on_report, quiet).install()
+        _watcher = Watcher(
+            stacks, max_entries, interval_ms, report_dir, on_report, quiet, mode, cupti
+        ).install()
     return _watcher
+
+
+def release_cupti() -> None:
+    """Hand the CUPTI subscription back so torch.profiler can take it."""
+    if _watcher is not None:
+        _watcher.release_cupti()
+
+
+def timeline():
+    """Everything recorded so far as columns; native mode only."""
+    return watch().timeline()
 
 
 def report(device: int | None = None) -> Report:
