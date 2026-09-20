@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vramxray"
+version = "0.0.1"
+description = "See the GPU memory PyTorch can't show you: explains CUDA OOMs, fragmentation, and where the rest of your VRAM went."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = []
+
+[project.optional-dependencies]
+polars = ["polars>=1.0"]
+dev = ["pytest>=8", "polars>=1.0"]
+
+[project.scripts]
+vramxray = "vramxray.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vramxray"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["gpu: needs a CUDA device"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.format]
+quote-style = "double"
