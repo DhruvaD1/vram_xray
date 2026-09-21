@@ -6,7 +6,6 @@ build-backend = "hatchling.build"
 name = "vramxray"
 version = "0.1.0"
 description = "See the GPU memory PyTorch can't show you: explains CUDA OOMs, fragmentation, and where the rest of your VRAM went."
-readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = []
