@@ -1,8 +1,6 @@
-"""vramxray: see the GPU memory PyTorch can't show you."""
-
 from __future__ import annotations
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
 
 from .frag import Explanation, explain
 from .report import Report

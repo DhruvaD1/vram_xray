@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vramxray"
-version = "0.0.1"
+version = "0.1.0"
 description = "See the GPU memory PyTorch can't show you: explains CUDA OOMs, fragmentation, and where the rest of your VRAM went."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,14 +12,21 @@ license = "MIT"
 dependencies = []
 
 [project.optional-dependencies]
+native = ["ninja"]              # the C++ core builds on first use; needs a compiler and CUDA headers
 polars = ["polars>=1.0"]
-dev = ["pytest>=8", "polars>=1.0"]
+dev = ["pytest>=8", "pytest-cov", "ruff", "ninja", "polars>=1.0"]
+
+[project.urls]
+Repository = "https://github.com/DhruvaD1/vram_xray"
 
 [project.scripts]
 vramxray = "vramxray.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vramxray"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/vramxray", "tests", "pyproject.toml", "README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -147,6 +147,50 @@ def cmd_analyze(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_merge(a: argparse.Namespace) -> int:
+    """One table across the JSON reports of a multi-process job."""
+    from .snapshot import fmt_bytes as b
+
+    rows = []
+    for path in a.reports:
+        with open(path) as f:
+            d = json.load(f)
+        acc = d.get("accounting") or {}
+        libs = acc.get("libs") or {}
+        nccl = sum(v for k, v in libs.items() if "nccl" in k.lower())
+        rows.append(
+            {
+                "rank": d.get("rank"),
+                "file": path,
+                "request": d.get("request"),
+                "verdict": (d.get("explanation") or {}).get("verdict"),
+                "torch": acc.get("torch_reserved") or 0,
+                "nccl": nccl,
+                "libs": sum(libs.values()) - nccl,
+                "other": acc.get("unattributed") or 0,
+            }
+        )
+    rows.sort(key=lambda r: (r["rank"] is None, r["rank"]))
+    print(
+        f"{'rank':>4}  {'request':>10}  {'verdict':<13} {'torch':>10}  {'nccl':>10}  "
+        f"{'other libs':>10}  {'outside':>10}"
+    )
+    for r in rows:
+        rank = "?" if r["rank"] is None else r["rank"]
+        print(
+            f"{rank:>4}  {b(r['request']):>10}  {(r['verdict'] or '-'):<13} {b(r['torch']):>10}  "
+            f"{b(r['nccl']):>10}  {b(r['libs']):>10}  {b(r['other']):>10}"
+        )
+    nccls = [r["nccl"] for r in rows if r["nccl"]]
+    if len(nccls) > 1:
+        med = sorted(nccls)[len(nccls) // 2]
+        skew = [r for r in rows if med and r["nccl"] > 1.5 * med]
+        if skew:
+            ranks = ", ".join(str(r["rank"]) for r in skew)
+            print(f"\nNCCL skew: rank(s) {ranks} hold more than 1.5x the median ({b(med)})")
+    return 0
+
+
 def cmd_run(a: argparse.Namespace) -> int:
     import runpy
 
@@ -182,6 +226,9 @@ def main(argv: list[str] | None = None) -> int:
     rn.add_argument("--stacks", choices=["python", "all"], help="record allocation stacks")
     rn.add_argument("--report-dir")
     rn.set_defaults(fn=cmd_run)
+    mg = sub.add_parser("merge", help="one table across per-rank OOM report JSON files")
+    mg.add_argument("reports", nargs="+")
+    mg.set_defaults(fn=cmd_merge)
     a = p.parse_args(argv)
     return a.fn(a)
 
