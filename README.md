@@ -1,5 +1,6 @@
 ## vramxray
 
+A memory debugger for PyTorch on nvidia gpus. It explains why a cuda job ran out of memory, names the memory torch cannot see, and points at the line to change.
 
 ### Usage/Install
 
