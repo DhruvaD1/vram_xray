@@ -1,5 +1,10 @@
 """Same fragmentation setup as split_remainder.py, but the OOM is left uncaught so the live
-report prints in front of the traceback. Run under `vramxray run` or with watch() as below."""
+report prints in front of the traceback.
+
+Run: python tests/repro/oom_live.py [python|native]
+"""
+
+import sys
 
 import torch
 
@@ -10,7 +15,7 @@ BUDGET = 2048 * MiB
 torch.cuda.set_per_process_memory_fraction(
     BUDGET / torch.cuda.get_device_properties(0).total_memory
 )
-vramxray.watch(stacks="python")
+vramxray.watch(stacks="python", mode=sys.argv[1] if len(sys.argv) > 1 else "auto")
 
 filler = [torch.empty(256 * MiB, dtype=torch.uint8, device="cuda") for _ in range(6)]
 big = torch.empty(512 * MiB, dtype=torch.uint8, device="cuda")

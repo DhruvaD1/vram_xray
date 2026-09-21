@@ -76,7 +76,7 @@ class Watcher:
         torch.cuda.init()
         for d in range(torch.cuda.device_count()):
             if not already_up:
-                # init() alone makes no context; the first kernel does, so run one
+                # init() alone makes no context. The first kernel does, so run one
                 torch.empty(1, device=f"cuda:{d}").zero_()
                 torch.cuda.synchronize(d)
             self.uuids[d] = _uuid(d)
@@ -155,10 +155,12 @@ class Watcher:
         stats = torch.cuda.memory_stats(device)
         reserved = stats.get("reserved_bytes.all.current", 0)
         allocated = stats.get("allocated_bytes.all.current", 0)
-        ex: Explanation = explain(snap, device, request=request, device_free=device_free)
         nvml = self.nvml.memory(device, self.uuids.get(device))
         if allowed_max is not None and nvml is not None and allowed_max >= nvml.total:
             allowed_max = None  # torch passes device_total when no fraction is set
+        ex: Explanation = explain(
+            snap, device, request=request, device_free=device_free, cap=allowed_max
+        )
         procs = self.nvml.processes(device, self.uuids.get(device))
         others = [p for p in procs if p.pid != os.getpid()]
         libs, images = self._native_buckets()

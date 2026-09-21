@@ -1,9 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
+
+namespace c10 {
+struct GatheredContext;
+}
 
 namespace vramxray {
 
@@ -15,6 +20,7 @@ struct Event {
   uint64_t size;
   uint64_t stream;
   int32_t lib;      // index into lib_names(), 0 = torch allocator
+  int32_t ctx = -1; // index into the kept contexts (allocation stacks), -1 for none
 };
 
 enum DriverKind : int32_t {
@@ -34,5 +40,9 @@ size_t event_count();
 
 int32_t lib_id_locked(const std::string& name);  // caller holds g_mu
 std::vector<std::string> lib_names_locked();
+
+// allocation stacks torch gathered, kept until the next drain and symbolized then
+int32_t keep_context_locked(std::shared_ptr<c10::GatheredContext> ctx);
+std::vector<std::shared_ptr<c10::GatheredContext>> take_contexts();
 
 }  // namespace vramxray

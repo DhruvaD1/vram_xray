@@ -14,6 +14,7 @@
 
 #include "common.h"
 #include "nvml_shim.h"
+#include "streams.h"
 
 namespace vramxray {
 
@@ -52,6 +53,8 @@ bool is_plumbing(const char* b) {
          (!g_self.empty() && strstr(b, g_self.c_str()));
 }
 
+}  // namespace
+
 // the library that called into the driver: first frame above libcuda/libcudart/ourselves
 int32_t caller_lib() {
   void* frames[64];
@@ -73,6 +76,8 @@ int32_t caller_lib() {
   std::lock_guard<std::mutex> g(g_mu);
   return lib_id_locked("unknown");
 }
+
+namespace {
 
 void grow(std::vector<uint64_t>& v, int32_t id) {
   if ((size_t)id >= v.size()) v.resize(id + 1, 0);
@@ -142,6 +147,7 @@ void CUPTIAPI on_cupti(void*, CUpti_CallbackDomain domain, CUpti_CallbackId id, 
   const bool failed = exit && d->functionReturnValue &&
                       *(const CUresult*)d->functionReturnValue != CUDA_SUCCESS;
 
+  if (streams_enabled()) streams_on_callback(id, d, exit, failed);
   if (is_module_load(id)) {
     on_module_load(d, exit, failed);
     return;
@@ -255,6 +261,7 @@ void cupti_stop() {
 }
 
 bool cupti_active() { return g_subscribed; }
+CUpti_SubscriberHandle cupti_subscriber() { return g_sub; }
 std::map<std::string, uint64_t> libs() { return by_lib(g_bytes_by_lib); }
 std::map<std::string, uint64_t> kernel_images() { return by_lib(g_images_by_lib); }
 size_t live_ptrs() { std::lock_guard<std::mutex> g(g_mu); return g_live_ptrs.size(); }

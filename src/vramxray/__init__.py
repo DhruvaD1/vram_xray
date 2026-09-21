@@ -35,6 +35,9 @@ def watch(
     return _watcher
 
 
+from . import streams  # noqa: E402
+
+
 def release_cupti() -> None:
     """Hand the CUPTI subscription back so torch.profiler can take it."""
     if _watcher is not None:
@@ -42,7 +45,7 @@ def release_cupti() -> None:
 
 
 def timeline():
-    """Everything recorded so far as columns; native mode only."""
+    """Everything recorded so far as columns. Native mode only."""
     return watch().timeline()
 
 
@@ -63,7 +66,10 @@ __all__ = [
     "analyze",
     "explain",
     "load",
+    "release_cupti",
     "report",
+    "streams",
+    "timeline",
     "watch",
     "__version__",
 ]

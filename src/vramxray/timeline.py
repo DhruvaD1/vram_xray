@@ -25,7 +25,9 @@ ACTIONS = {
 class Timeline:
     def __init__(self, columns: dict[str, list]):
         self.columns = dict(columns)
-        self.columns["action"] = [ACTIONS.get(a, str(a)) for a in self.columns.get("action", [])]
+        self.columns["action"] = [
+            ACTIONS.get(int(a), str(a)) for a in self.columns.get("action", [])
+        ]
 
     def __len__(self) -> int:
         return len(self.columns.get("ts", []))

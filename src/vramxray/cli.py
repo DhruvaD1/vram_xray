@@ -7,12 +7,12 @@ from collections.abc import Iterable
 
 from . import __version__
 from .frag import Explanation, explain, if_freed
-from .snapshot import Frame, Snapshot, fmt_bytes, load
+from .snapshot import Frame, Snapshot, fmt_bytes, load, user_frames
 
 
 def _stack(frames: Iterable[Frame], n: int = 3) -> str:
     # drop torch's own frames so the user's line comes first
-    keep = [f for f in frames if "/torch/" not in f.filename] or list(frames)
+    keep = user_frames(frames) or list(frames)
     if not keep:
         return "(no stack; enable record_memory_history)"
     parts = [f"{f.filename.rsplit('/', 1)[-1]}:{f.line} {f.name}" for f in keep[:n]]
@@ -74,11 +74,11 @@ def render(snap: Snapshot, ex: Explanation, top: int) -> str:
     if ex.verdict == "fragmentation":
         lines.append("  what would help:")
         fits_if_merged = ex.request is not None and ex.free_in_segments >= ex.request
-        if fits_if_merged and ex.expandable_recoverable:
+        if fits_if_merged and ex.expandable_recoverable and not ex.expandable_on:
             lines.append(
-                "    PYTORCH_ALLOC_CONF=expandable_segments:True   free pages from different holes "
-                f"can back one block: {b(ex.free_in_segments)} becomes usable as a unit instead "
-                f"of {b(ex.largest_hole)}"
+                f"    {ex.alloc_conf_var}=expandable_segments:True   free pages from different "
+                f"holes can back one block: {b(ex.free_in_segments)} becomes usable as a unit "
+                f"instead of {b(ex.largest_hole)}"
             )
         for k in (1, 2, 3):
             cand = ex.pins[:k]
@@ -109,6 +109,10 @@ def to_json(ex: Explanation) -> dict:
         "verdict": ex.verdict,
         "verdict_text": ex.verdict_text,
         "expandable_recoverable": ex.expandable_recoverable,
+        "cap": ex.cap,
+        "alloc_conf_var": ex.alloc_conf_var,
+        "expandable_on": ex.expandable_on,
+        "sites": [{"where": s.where, "bytes": s.bytes, "count": s.count} for s in ex.sites],
         "holes": [
             {
                 "segment": hex(h.segment.address),

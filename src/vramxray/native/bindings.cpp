@@ -1,38 +1,60 @@
+#include <pybind11/numpy.h>
 #include <torch/extension.h>
 
 #include "common.h"
 #include "cupti_attr.h"
 #include "nvml_shim.h"
+#include "streams.h"
 #include "torch_hooks.h"
 
 namespace {
 
+template <class T>
+py::array_t<T> column(const std::vector<vramxray::Event>& ev, T vramxray::Event::*field) {
+  py::array_t<T> arr(ev.size());
+  T* out = arr.mutable_data();
+  for (size_t i = 0; i < ev.size(); i++) out[i] = ev[i].*field;
+  return arr;
+}
+
+// numeric columns come back as numpy arrays, so a long run does not become a million Python ints
 py::dict drain() {
   auto ev = vramxray::take_events();
+  auto ctxs = vramxray::take_contexts();
   std::vector<std::string> names;
   {
     std::lock_guard<std::mutex> g(vramxray::g_mu);
     names = vramxray::lib_names_locked();
   }
-  py::list ts, action, device, addr, size, stream, lib;
+  std::vector<std::string> stacks = vramxray::symbolize_contexts(ctxs);
+  py::list lib, stack;
   for (auto& e : ev) {
-    ts.append(e.ts);
-    action.append(e.action);
-    device.append(e.device);
-    addr.append(e.addr);
-    size.append(e.size);
-    stream.append(e.stream);
     lib.append(names[e.lib]);
+    stack.append(e.ctx >= 0 && (size_t)e.ctx < stacks.size() ? stacks[e.ctx] : std::string());
   }
   py::dict d;
-  d["ts"] = ts;
-  d["action"] = action;
-  d["device"] = device;
-  d["addr"] = addr;
-  d["size"] = size;
-  d["stream"] = stream;
+  d["ts"] = column(ev, &vramxray::Event::ts);
+  d["action"] = column(ev, &vramxray::Event::action);
+  d["device"] = column(ev, &vramxray::Event::device);
+  d["addr"] = column(ev, &vramxray::Event::addr);
+  d["size"] = column(ev, &vramxray::Event::size);
+  d["stream"] = column(ev, &vramxray::Event::stream);
   d["lib"] = lib;
+  d["stack"] = stack;
   return d;
+}
+
+py::list stream_findings() {
+  py::list out;
+  for (auto& f : vramxray::streams_findings()) {
+    py::dict d;
+    d["kind"] = f.kind;
+    d["lib"] = f.lib;
+    d["detail"] = f.detail;
+    d["count"] = f.count;
+    out.append(d);
+  }
+  return out;
 }
 
 py::dict stats() {
@@ -55,5 +77,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("libs", &vramxray::libs, "live device bytes per calling library");
   m.def("kernel_images", &vramxray::kernel_images, "module/library image bytes per calling library");
   m.def("drain", &drain, "take all buffered events");
+  m.def("streams_start", &vramxray::streams_start, py::arg("channels") = false,
+        py::arg("check_legacy") = false,
+        "enable stream checks. channels=True also maps streams to hardware channels");
+  m.def("streams_stop", &vramxray::streams_stop);
+  m.def("streams_findings", &stream_findings, "stream hygiene findings so far");
   m.def("stats", &stats);
 }

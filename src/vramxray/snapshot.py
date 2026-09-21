@@ -182,6 +182,27 @@ def load(source: str | Path | dict[str, Any]) -> Snapshot:
         return from_dict(pickle.load(f))
 
 
+CPP_SUFFIXES = (".cpp", ".cc", ".cu", ".cuh", ".h", ".hpp", ".c")
+
+
+def _is_cpp(f: Frame) -> bool:
+    return f.filename in ("??", "") or f.filename.endswith(CPP_SUFFIXES)
+
+
+def user_frames(frames: Iterable[Frame]) -> list[Frame]:
+    """The frames worth showing, which means the user's own Python.
+
+    With stacks="all" torch also hands back its C++ internals and unresolved "??" frames. Those
+    are never what someone wants to read, so keep them only if there is no Python at all.
+    Interpreter pseudo files like <string> and <stdin> count as Python.
+    """
+    frames = list(frames)
+    py = [f for f in frames if not _is_cpp(f) and "/torch/" not in f.filename]
+    if py:
+        return py
+    return [f for f in frames if f.filename not in ("??", "") and "/torch/" not in f.filename]
+
+
 def fmt_bytes(n: int | float | None) -> str:
     n = float(n or 0)
     if abs(n) >= GiB:

@@ -11,6 +11,7 @@ namespace {
 std::vector<Event> g_events;
 const size_t g_cap = 1u << 20;
 std::vector<std::string> g_libnames{"torch"};
+std::vector<std::shared_ptr<c10::GatheredContext>> g_contexts;
 std::unordered_map<std::string, int32_t> g_libindex{{"torch", 0}};
 }  // namespace
 
@@ -46,5 +47,17 @@ int32_t lib_id_locked(const std::string& name) {
 }
 
 std::vector<std::string> lib_names_locked() { return g_libnames; }
+
+int32_t keep_context_locked(std::shared_ptr<c10::GatheredContext> ctx) {
+  g_contexts.push_back(std::move(ctx));
+  return (int32_t)g_contexts.size() - 1;
+}
+
+std::vector<std::shared_ptr<c10::GatheredContext>> take_contexts() {
+  std::lock_guard<std::mutex> g(g_mu);
+  std::vector<std::shared_ptr<c10::GatheredContext>> out;
+  out.swap(g_contexts);
+  return out;
+}
 
 }  // namespace vramxray

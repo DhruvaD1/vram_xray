@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .accounting import Accounting
 from .frag import Explanation, if_freed
-from .snapshot import fmt_bytes
+from .snapshot import fmt_bytes, user_frames
 
 
 @dataclass(frozen=True)
@@ -24,11 +24,11 @@ def suggest(ex: Explanation, acc: Accounting | None) -> list[Suggestion]:
     req = ex.request or 0
 
     if ex.verdict == "fragmentation":
-        if ex.free_in_segments >= req and ex.expandable_recoverable:
+        if ex.free_in_segments >= req and ex.expandable_recoverable and not ex.expandable_on:
             out.append(
                 Suggestion(
-                    "PYTORCH_ALLOC_CONF=expandable_segments:True, so free pages from different "
-                    f"holes can back one block; the {fmt_bytes(ex.free_in_segments)} free would "
+                    f"{ex.alloc_conf_var}=expandable_segments:True, so free pages from different "
+                    f"holes can back one block. The {fmt_bytes(ex.free_in_segments)} free would "
                     "then fit this request",
                     0,
                 )
@@ -98,19 +98,31 @@ def suggest(ex: Explanation, acc: Accounting | None) -> list[Suggestion]:
                     0,
                 )
             )
-    if ex.verdict == "exhaustion" and not out:
-        out.append(
-            Suggestion(
-                "this is genuine exhaustion: smaller batch, activation checkpointing, or "
-                "offloading",
-                0,
+    if ex.verdict == "exhaustion":
+        if ex.sites and ex.sites[0].where != "(no Python stack: autograd/backward or history off)":
+            top = ex.sites[0]
+            share = 100 * top.bytes / max(ex.live, 1)
+            out.append(
+                Suggestion(
+                    f"{share:.0f}% of live memory ({fmt_bytes(top.bytes)}) comes from {top.where}; "
+                    "that is the place to shrink: smaller batch, activation checkpointing, "
+                    "or offloading",
+                    0,
+                )
             )
-        )
+        else:
+            out.append(
+                Suggestion(
+                    "this is genuine exhaustion: smaller batch, activation checkpointing, or "
+                    "offloading. Use watch(stacks='python') to see which call sites hold it",
+                    0,
+                )
+            )
     return out
 
 
 def _where(p) -> str:
-    frames = [f for f in p.frames if "/torch/" not in f.filename] or list(p.frames)
+    frames = user_frames(p.frames) or list(p.frames)
     if not frames:
         return f"{fmt_bytes(p.block.size)} block, no stack"
     f = frames[0]

@@ -1,5 +1,5 @@
 from vramxray.frag import explain, holes_in, if_freed
-from vramxray.snapshot import ACTIVE, INACTIVE, MiB, from_dict
+from vramxray.snapshot import ACTIVE, INACTIVE, GiB, MiB, from_dict
 
 
 def snap(segments, traces=(), device=0):
@@ -110,3 +110,97 @@ def test_oom_entry_drives_request_and_age():
     ex = explain(s)
     assert ex.request == 505 * MiB and ex.device_free == 3 * MiB and ex.verdict == "fragmentation"
     assert ex.pins[0].age == 1
+
+
+def test_live_sites_group_by_user_frame():
+    s = snap(
+        [
+            (
+                64 * MiB,
+                0,
+                [
+                    (16 * MiB, ACTIVE, ["/x/model.py", "/site-packages/torch/nn.py"]),
+                    (16 * MiB, ACTIVE, ["/x/model.py", "/site-packages/torch/nn.py"]),
+                    (8 * MiB, ACTIVE, ["/x/optim.py"]),
+                    (24 * MiB, INACTIVE, []),
+                ],
+            )
+        ]
+    )
+    ex = explain(s, request=4 * GiB, stream=0, device_free=0)
+    assert ex.verdict == "exhaustion"
+    assert ex.sites[0].where.startswith("model.py") and ex.sites[0].bytes == 32 * MiB
+    assert ex.sites[0].count == 2 and ex.sites[1].bytes == 8 * MiB
+
+
+def test_cap_limits_headroom_not_device_free():
+    s = snap([(64 * MiB, 0, [(60 * MiB, ACTIVE, []), (4 * MiB, INACTIVE, [])])])
+    ex = explain(s, request=100 * MiB, stream=0, device_free=10 * GiB, cap=64 * MiB)
+    assert ex.verdict == "exhaustion" and ex.cap == 64 * MiB
+    assert "capped at 64.0 MiB" in ex.verdict_text and "0 KiB left" in ex.verdict_text
+
+
+def test_cpp_unwinder_frames_do_not_become_call_sites():
+    s = snap(
+        [
+            (
+                8 * MiB,
+                0,
+                [(8 * MiB, ACTIVE, ["??", "??", "/x/train.py", "/site-packages/torch/nn.py"])],
+            )
+        ]
+    )
+    ex = explain(s, request=1 * GiB, stream=0, device_free=0)
+    assert ex.sites[0].where.startswith("train.py")
+
+
+def test_interpreter_pseudo_files_count_as_user_python():
+    # a script run with python -c reports "<string>", which must not be mistaken for C++
+    s = snap(
+        [
+            (
+                8 * MiB,
+                0,
+                [
+                    (
+                        8 * MiB,
+                        ACTIVE,
+                        ["memory_snapshot.cpp", "??", "<string>", "/site-packages/torch/nn.py"],
+                    )
+                ],
+            )
+        ]
+    )
+    ex = explain(s, request=1 * GiB, stream=0, device_free=0)
+    assert ex.sites[0].where.startswith("<string>")
+
+
+def test_alloc_conf_var_follows_what_torch_reports():
+    from vramxray.frag import alloc_conf_var
+
+    assert alloc_conf_var({"PYTORCH_CUDA_ALLOC_CONF": "", "max_split_size": -1}) == (
+        "PYTORCH_CUDA_ALLOC_CONF"
+    )
+    assert alloc_conf_var({"PYTORCH_ALLOC_CONF": ""}) == "PYTORCH_ALLOC_CONF"
+    assert alloc_conf_var({}) == "PYTORCH_CUDA_ALLOC_CONF"
+
+
+def test_no_expandable_advice_when_it_is_already_on():
+    from vramxray.suggest import suggest
+
+    raw = snap(
+        [
+            (
+                512 * MiB,
+                0,
+                [(500 * MiB, INACTIVE, []), (4 * MiB, ACTIVE, ["pin.py"]), (8 * MiB, INACTIVE, [])],
+            )
+        ]
+    )
+    raw.settings = {
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        "expandable_segments": True,
+    }
+    ex = explain(raw, request=505 * MiB, stream=0, device_free=0)
+    assert ex.expandable_on
+    assert not any("expandable_segments" in s.text for s in suggest(ex, None))

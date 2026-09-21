@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from .accounting import Accounting
 from .frag import Explanation
-from .snapshot import fmt_bytes
+from .snapshot import fmt_bytes, user_frames
 from .suggest import Suggestion
 
 
@@ -145,19 +145,26 @@ def render(r: Report) -> str:
             subsequent_indent="      ",
         )
     )
-    for h in ex.holes[:3]:
-        seg = h.segment
-        lines.append(
-            f"    hole {b(h.size):>10} in a {b(seg.total_size)} segment at 0x{seg.address:x}"
-        )
-    if ex.pins:
-        lines.append("    pinned by:")
-        for p in ex.pins[:4]:
-            age = f"age {p.age} allocs" if p.age is not None else ""
+    # holes and pins only matter when they are the reason. Otherwise say what the memory is
+    if ex.verdict == "fragmentation":
+        for h in ex.holes[:3]:
+            seg = h.segment
             lines.append(
-                f"      {b(p.block.size):>10}  holds {b(p.wasted):>10}  {age:<16} "
-                f"{_stack(p.frames)}"
+                f"    hole {b(h.size):>10} in a {b(seg.total_size)} segment at 0x{seg.address:x}"
             )
+        if ex.pins:
+            lines.append("    pinned by:")
+            for p in ex.pins[:4]:
+                age = f"age {p.age} allocs" if p.age is not None else ""
+                lines.append(
+                    f"      {b(p.block.size):>10}  holds {b(p.wasted):>10}  {age:<16} "
+                    f"{_stack(p.frames)}"
+                )
+    if ex.sites and ex.verdict != "fragmentation":
+        lines.append(f"    live memory ({b(ex.live)}) by call site:")
+        for s in ex.sites:
+            share = 100 * s.bytes / max(ex.live, 1)
+            lines.append(f"      {b(s.bytes):>10}  {share:4.0f}%  {s.count:5d} blocks  {s.where}")
 
     if r.suggestions:
         lines.append("")
@@ -170,7 +177,7 @@ def render(r: Report) -> str:
 
 
 def _stack(frames, n: int = 2) -> str:
-    keep = [f for f in frames if "/torch/" not in f.filename] or list(frames)
+    keep = user_frames(frames) or list(frames)
     if not keep:
         return "(no stack; use watch(stacks='python'))"
     return " from ".join(f"{f.filename.rsplit('/', 1)[-1]}:{f.line} {f.name}" for f in keep[:n])
