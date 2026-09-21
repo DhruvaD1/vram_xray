@@ -9,6 +9,7 @@ from .accounting import Accounting
 from .frag import Explanation
 from .snapshot import fmt_bytes, user_frames
 from .suggest import Suggestion
+from .timeseries import Row
 
 
 @dataclass
@@ -21,6 +22,8 @@ class Report:
     rank: int | None = None
     torch_version: str = ""
     created: float = field(default_factory=time.time)
+    peak: Row | None = None  # high water mark seen since watch() started
+    stalls: dict[str, tuple[int, int]] = field(default_factory=dict)  # library -> (ns, calls)
 
     def __str__(self) -> str:
         return render(self)
@@ -51,6 +54,8 @@ class Report:
                 "unattributed": acc.unattributed,
                 "overcommitted": acc.overcommitted,
             },
+            "peak": None if self.peak is None else vars(self.peak),
+            "stalls": {k: {"ns": ns, "calls": n} for k, (ns, n) in self.stalls.items()},
             "suggestions": [(s.text, s.recovers) for s in self.suggestions],
         }
 
@@ -113,22 +118,38 @@ def render(r: Report) -> str:
         if acc.other_processes:
             pids = ", ".join(str(p.pid) for p in acc.other_processes[:4])
             lines.append(_row("other processes", acc.other_total, f"pid {pids}"))
+        # say what is mixed into this number rather than pretending it is one thing
         outside = []
         if not acc.context_known:
-            outside.append("this process's CUDA context")
+            outside.append("this CUDA context")
         if not acc.processes_known:
-            outside.append("other processes (NVML gives no per-process list here)")
+            outside.append("other processes")
         if not acc.libs:
-            outside.append(
-                "non-torch libraries such as NCCL and cuBLAS (vramxray[native] names them)"
-            )
+            outside.append("non-torch libraries")
         label = "unattributed" if not outside else "outside torch"
-        lines.append(_row(label, acc.unattributed, "; ".join(outside)))
+        note = "could be " + " or ".join(outside) if outside else ""
+        lines.append(_row(label, acc.unattributed, note))
     elif acc is not None:
-        lines.append("  device (NVML)        unavailable; only torch's own view below")
+        lines.append("  device (NVML)        unavailable, only torch's own view below")
         lines.append(
             _row("torch reserved", acc.torch_reserved, f"allocated {b(acc.torch_allocated)}")
         )
+
+    if r.peak is not None and acc is not None and r.peak.reserved > acc.torch_reserved:
+        over = r.peak.reserved - acc.torch_reserved
+        lines.append(
+            f"    peak so far         {b(r.peak.reserved):>11}   reserved at t={r.peak.t:.0f}s, "
+            f"{b(over)} above now"
+        )
+    if r.stalls:
+        total_ns = sum(ns for ns, _ in r.stalls.values())
+        calls = sum(n for _, n in r.stalls.values())
+        if total_ns > 5_000_000:  # below a few milliseconds nobody cares
+            worst = max(r.stalls.items(), key=lambda kv: kv[1][0])
+            lines.append(
+                f"    allocator stalls    {total_ns / 1e6:>8.0f} ms   over {calls} driver calls, "
+                f"mostly {worst[0]}"
+            )
 
     lines.append("")
     if r.request is not None:
@@ -179,5 +200,5 @@ def render(r: Report) -> str:
 def _stack(frames, n: int = 2) -> str:
     keep = user_frames(frames) or list(frames)
     if not keep:
-        return "(no stack; use watch(stacks='python'))"
+        return "(no stack, use watch(stacks='python'))"
     return " from ".join(f"{f.filename.rsplit('/', 1)[-1]}:{f.line} {f.name}" for f in keep[:n])

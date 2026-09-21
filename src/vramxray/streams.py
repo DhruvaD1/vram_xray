@@ -11,15 +11,15 @@ from dataclasses import dataclass
 EXPLAIN = {
     "blocking_stream": (
         "a stream was created without cudaStreamNonBlocking, so it synchronizes with the "
-        "legacy default stream in both directions; most of torch runs on that default stream, "
+        "legacy default stream in both directions. Most of torch runs on that default stream, "
         "so every launch on this stream serializes against torch"
     ),
     "launch_outside_capture": (
-        "work was launched on a stream that is not part of an active CUDA graph capture; it "
+        "work was launched on a stream that is not part of an active CUDA graph capture. It "
         "ran once during capture and will not be in the graph on replay"
     ),
     "legacy_stream_launch": (
-        "launches on the legacy null stream; fine for torch itself, but a library doing this "
+        "launches on the legacy null stream. Fine for torch itself, but a library doing this "
         "while torch uses side streams gets implicit synchronization it did not ask for"
     ),
     "shared_channel": (

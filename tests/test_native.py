@@ -36,3 +36,14 @@ def test_native_oom_report_still_prints(tmp_path):
     assert "vramxray: OOM on cuda:0" in err
     assert err.index("vramxray: OOM") < err.index("Traceback")
     assert "verdict: fragmentation" in err
+
+
+@pytest.mark.gpu
+def test_mirror_matches_torch_and_the_snapshot(tmp_path):
+    """The mirror is rebuilt from events, so it has to agree with what torch reports."""
+    proc = run_script("mirror_check.py", cwd=tmp_path)
+    out = _out(proc)
+    assert proc.returncode == 0, quiet(out)[-2000:]
+    assert int(out.split("WORST_RESERVED ")[1].split()[0]) == 0, "reserved drifted from torch"
+    # a hole can be off by the rounding slack torch leaves inside a block, but no more
+    assert int(out.split("WORST_HOLE ")[1].split()[0]) <= (1 << 20), "hole size drifted too far"

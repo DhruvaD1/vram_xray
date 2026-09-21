@@ -192,11 +192,11 @@ def _verdict(
     room = "under the process cap" if cap else "on the device"
     if request is None:
         return "unknown", (
-            "No OOM entry in the trace; pass --request to evaluate a hypothetical allocation."
+            "No OOM entry in the trace. Pass --request to evaluate a hypothetical allocation."
         )
     if request <= largest:
         return "unknown", (
-            f"A {b(request)} request fits in the largest hole ({b(largest)}); "
+            f"A {b(request)} request fits in the largest hole ({b(largest)}), so "
             "the OOM was not caused by this layout."
         )
     if request <= free_in:
@@ -207,7 +207,7 @@ def _verdict(
         )
     if other_stream_free >= request:
         return "stream", (
-            f"{b(other_stream_free)} is free in segments owned by other streams; torch never "
+            f"{b(other_stream_free)} is free in segments owned by other streams, and torch never "
             f"serves a request from another stream's pool. The requesting stream only had "
             f"{b(free_in)} free."
         )
@@ -215,8 +215,8 @@ def _verdict(
     return "exhaustion", (
         f"{b(request)} requested with {b(free_in)} free in segments and "
         f"{b(device_free)} free {room}. Even after returning every cached block "
-        f"to the driver, {b(need)} would still be missing. This is real exhaustion; "
-        "the live memory below says what it is spent on."
+        f"to the driver, {b(need)} would still be missing. This is real exhaustion. "
+        "The live memory below says what it is spent on."
     )
 
 

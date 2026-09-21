@@ -204,3 +204,12 @@ def test_no_expandable_advice_when_it_is_already_on():
     ex = explain(raw, request=505 * MiB, stream=0, device_free=0)
     assert ex.expandable_on
     assert not any("expandable_segments" in s.text for s in suggest(ex, None))
+
+
+def test_public_names_are_not_shadowed_by_their_modules():
+    # importing vramxray.events would otherwise overwrite vramxray.timeline, and the same for
+    # history, which only showed up on the second call
+    import vramxray
+
+    for name in ("report", "timeline", "history", "watch", "analyze", "stalls"):
+        assert callable(getattr(vramxray, name)), f"{name} is not callable"

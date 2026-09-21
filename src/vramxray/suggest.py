@@ -19,9 +19,24 @@ class Suggestion:
         return f"{self.text}{est}"
 
 
-def suggest(ex: Explanation, acc: Accounting | None) -> list[Suggestion]:
+def suggest(
+    ex: Explanation, acc: Accounting | None, free_block_trend: float = 0.0
+) -> list[Suggestion]:
     out: list[Suggestion] = []
     req = ex.request or 0
+
+    # a biggest free block that keeps shrinking is fragmentation building up over a run, which
+    # looks nothing like a single bad allocation and is otherwise very hard to notice
+    if free_block_trend < -256 * 1024:
+        out.append(
+            Suggestion(
+                f"the largest free block has been shrinking by about "
+                f"{fmt_bytes(-free_block_trend)} per sample, so fragmentation is building over "
+                "the run rather than coming from one allocation. Check what is allocated once "
+                "per step and never freed",
+                0,
+            )
+        )
 
     if ex.verdict == "fragmentation":
         if ex.free_in_segments >= req and ex.expandable_recoverable and not ex.expandable_on:
@@ -39,12 +54,12 @@ def suggest(ex: Explanation, acc: Accounting | None) -> list[Suggestion]:
                 break
             merged = if_freed(ex.holes, [p.block for p in cand])
             if merged >= req:
-                where = "; ".join(_where(p) for p in cand)
+                where = ", ".join(_where(p) for p in cand)
                 out.append(
                     Suggestion(
                         f"free or move the {k} pinning block{'s' if k > 1 else ''} above "
-                        f"({where}), for example by allocating them before the big tensors; "
-                        f"that gives a {fmt_bytes(merged)} hole",
+                        f"({where}), for example by allocating them before the big tensors. "
+                        f"That gives a {fmt_bytes(merged)} hole",
                         0,
                     )
                 )
@@ -53,7 +68,7 @@ def suggest(ex: Explanation, acc: Accounting | None) -> list[Suggestion]:
     if ex.verdict == "stream":
         out.append(
             Suggestion(
-                "the free memory belongs to another stream's pool; call torch.cuda.empty_cache() "
+                "the free memory belongs to another stream's pool. Call torch.cuda.empty_cache() "
                 "or keep this allocation on the stream that owns the cached blocks",
                 0,
             )
@@ -64,7 +79,7 @@ def suggest(ex: Explanation, acc: Accounting | None) -> list[Suggestion]:
             out.append(
                 Suggestion(
                     f"this process is capped at {fmt_bytes(acc.allowed_max)} by "
-                    "set_per_process_memory_fraction (or the serving framework); raise it if the "
+                    "set_per_process_memory_fraction (or the serving framework). Raise it if the "
                     "device really has room",
                     0,
                 )
@@ -80,7 +95,7 @@ def suggest(ex: Explanation, acc: Accounting | None) -> list[Suggestion]:
         if acc.nvml and nccl > acc.nvml.total // 10:
             out.append(
                 Suggestion(
-                    f"NCCL holds {fmt_bytes(nccl)}; check NCCL_BUFFSIZE and how many "
+                    f"NCCL holds {fmt_bytes(nccl)}. Check NCCL_BUFFSIZE and how many "
                     "communicators are alive",
                     0,
                 )
@@ -93,7 +108,7 @@ def suggest(ex: Explanation, acc: Accounting | None) -> list[Suggestion]:
         ):
             out.append(
                 Suggestion(
-                    f"{fmt_bytes(acc.unattributed)} is used by something outside torch; install "
+                    f"{fmt_bytes(acc.unattributed)} is used by something outside torch. Install "
                     "vramxray[native] to see which library (NCCL, cuBLAS, Triton, ...)",
                     0,
                 )
@@ -104,8 +119,8 @@ def suggest(ex: Explanation, acc: Accounting | None) -> list[Suggestion]:
             share = 100 * top.bytes / max(ex.live, 1)
             out.append(
                 Suggestion(
-                    f"{share:.0f}% of live memory ({fmt_bytes(top.bytes)}) comes from {top.where}; "
-                    "that is the place to shrink: smaller batch, activation checkpointing, "
+                    f"{share:.0f}% of live memory ({fmt_bytes(top.bytes)}) comes from {top.where}. "
+                    "That is the place to shrink: smaller batch, activation checkpointing, "
                     "or offloading",
                     0,
                 )

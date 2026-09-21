@@ -3,6 +3,7 @@
 
 #include "common.h"
 #include "cupti_attr.h"
+#include "mirror.h"
 #include "nvml_shim.h"
 #include "streams.h"
 #include "torch_hooks.h"
@@ -57,6 +58,18 @@ py::list stream_findings() {
   return out;
 }
 
+py::dict mirror_stats(int device) {
+  auto m = vramxray::mirror_stats(device);
+  py::dict d;
+  d["reserved"] = m.reserved;
+  d["live"] = m.live;
+  d["free_in_segments"] = m.free_in_segments;
+  d["largest_free"] = m.largest_free;
+  d["segments"] = m.segments;
+  d["blocks"] = m.blocks;
+  return d;
+}
+
 py::dict stats() {
   py::dict d;
   d["events"] = vramxray::event_count();
@@ -83,4 +96,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("streams_stop", &vramxray::streams_stop);
   m.def("streams_findings", &stream_findings, "stream hygiene findings so far");
   m.def("stats", &stats);
+  m.def("mirror_stats", &mirror_stats, py::arg("device") = 0,
+        "allocator layout numbers kept live from the trace events");
+  m.def("mirror_devices", &vramxray::mirror_devices);
+  m.def("mirror_event", &vramxray::mirror_on_trace,
+        "feed one event in by hand, used to seed the mirror with what existed before we attached");
+  m.def("mirror_reset", &vramxray::mirror_reset);
+  m.def("stalls", &vramxray::stalls, "nanoseconds and calls inside driver allocation APIs, per library");
 }

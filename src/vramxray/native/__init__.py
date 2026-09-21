@@ -5,6 +5,10 @@ import sys
 import warnings
 from pathlib import Path
 
+# same values as c10's TraceEntry::Action, see native/mirror.h
+TA_ALLOC = 0
+TA_SEGMENT_ALLOC = 3
+
 _ext = None
 _tried = False
 
@@ -48,8 +52,8 @@ def load(verbose: bool = False):
     cuda_inc = _cuda_include()
     if cupti_lib is None or cuda_inc is None:
         warnings.warn(
-            "vramxray: native mode needs the CUDA headers and torch's CUPTI wheel; "
-            "staying in pure mode",
+            "vramxray: native mode needs the CUDA headers and torch's CUPTI wheel. "
+            "Staying in pure mode",
             stacklevel=2,
         )
         return None

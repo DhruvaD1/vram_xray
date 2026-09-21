@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "common.h"
+#include "mirror.h"
 
 namespace vramxray {
 
@@ -25,7 +26,16 @@ namespace {
 std::atomic<long> g_oom_calls{0};
 bool g_installed = false;
 
+// our enum has to line up with torch's, or the mirror would read the wrong events
+static_assert((int)TraceEntry::Action::ALLOC == TA_ALLOC);
+static_assert((int)TraceEntry::Action::FREE_COMPLETED == TA_FREE_COMPLETED);
+static_assert((int)TraceEntry::Action::SEGMENT_ALLOC == TA_SEGMENT_ALLOC);
+static_assert((int)TraceEntry::Action::SEGMENT_FREE == TA_SEGMENT_FREE);
+static_assert((int)TraceEntry::Action::SEGMENT_MAP == TA_SEGMENT_MAP);
+static_assert((int)TraceEntry::Action::SEGMENT_UNMAP == TA_SEGMENT_UNMAP);
+
 void on_trace(const TraceEntry& e) {
+  mirror_on_trace((int32_t)e.action_, (int32_t)e.device_, (uint64_t)e.addr_, (uint64_t)e.size_);
   int32_t ctx = -1;
   if (e.context_) {
     // torch already gathered the stack (record_memory_history is on). Keep it, symbolize later

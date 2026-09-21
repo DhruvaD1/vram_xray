@@ -14,7 +14,7 @@ def _stack(frames: Iterable[Frame], n: int = 3) -> str:
     # drop torch's own frames so the user's line comes first
     keep = user_frames(frames) or list(frames)
     if not keep:
-        return "(no stack; enable record_memory_history)"
+        return "(no stack, enable record_memory_history)"
     parts = [f"{f.filename.rsplit('/', 1)[-1]}:{f.line} {f.name}" for f in keep[:n]]
     return " from ".join(parts)
 

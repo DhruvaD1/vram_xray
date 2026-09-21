@@ -8,10 +8,11 @@ from collections.abc import Callable
 
 from .accounting import Accounting, reconcile
 from .frag import Explanation, explain
-from .nvml import NVML, Sampler
+from .nvml import NVML
 from .report import Report
 from .snapshot import from_dict
 from .suggest import suggest
+from .timeseries import History
 
 
 class Watcher:
@@ -19,7 +20,7 @@ class Watcher:
         self,
         stacks: str | None = None,
         max_entries: int = 200_000,
-        interval_ms: int = 50,
+        interval_ms: int = 200,
         report_dir: str | None = None,
         on_report: Callable[[Report], None] | None = None,
         quiet: bool = False,
@@ -34,7 +35,7 @@ class Watcher:
         self.quiet = quiet
         self.nvml = NVML()
         self.baseline: dict[int, int] = {}
-        self.samplers: dict[int, Sampler] = {}
+        self.history: History | None = None
         self.uuids: dict[int, str | None] = {}
         self.reports: list[Report] = []
         self.mode = mode
@@ -68,7 +69,7 @@ class Watcher:
                     else f"error {self.cupti_rc}"
                 )
                 print(
-                    f"vramxray: CUPTI unavailable ({why}); libraries will not be named",
+                    f"vramxray: CUPTI unavailable ({why}). Libraries will not be named",
                     file=sys.stderr,
                 )
         already_up = torch.cuda.is_initialized()
@@ -81,10 +82,6 @@ class Watcher:
                 torch.cuda.synchronize(d)
             self.uuids[d] = _uuid(d)
             m = self.nvml.memory(d, self.uuids[d])
-            if m is not None:
-                s = Sampler(self.nvml, d, self.uuids[d], self.interval_ms)
-                s.start()
-                self.samplers[d] = s
             # the context is only measurable as a delta across our own init. If CUDA was already
             # up, fall back to NVML's per-process number, which WSL2 does not provide.
             own = next(
@@ -101,6 +98,8 @@ class Watcher:
                 self.baseline[d] = -1  # unknown
         if self.native is not None:
             self.native.install()
+            self._seed_mirror()
+        self.history = History(self.nvml, self.uuids, self.native, self.interval_ms).start()
         if self.stacks:
             torch.cuda.memory._record_memory_history(
                 enabled="all", stacks=self.stacks, max_entries=self.max_entries
@@ -175,9 +174,48 @@ class Watcher:
             processes_known=any(p.used is not None for p in procs),
             allowed_max=allowed_max,
         )
-        rep = Report(device, ex, acc, suggest(ex, acc), request, _rank(), torch.__version__)
+        peak = self.history.peak(device) if self.history else None
+        stalls = dict(self.native.stalls()) if self.native is not None else {}
+        trend = self.history.largest_free_trend(device) if self.history else 0.0
+        rep = Report(
+            device,
+            ex,
+            acc,
+            suggest(ex, acc, trend),
+            request=request,
+            rank=_rank(),
+            torch_version=torch.__version__,
+            peak=peak,
+            stalls=stalls,
+        )
         self.reports.append(rep)
         return rep
+
+    def _seed_mirror(self) -> None:
+        """Tell the native mirror about segments that already existed when we attached.
+
+        It only sees events from now on, so without this the numbers are short by whatever
+        torch had already reserved, which is at least the warm up kernel's segment.
+        """
+        import torch
+
+        from .native import TA_ALLOC, TA_SEGMENT_ALLOC
+
+        for device in range(torch.cuda.device_count()):
+            for seg in torch.cuda.memory._snapshot(device).get("segments", []):
+                if seg.get("device", device) != device:
+                    continue
+                self.native.mirror_event(
+                    TA_SEGMENT_ALLOC, device, seg["address"], seg["total_size"]
+                )
+                addr = seg["address"]
+                for blk in seg.get("blocks", []):
+                    size = blk["size"]
+                    if blk["state"] != "inactive":
+                        self.native.mirror_event(
+                            TA_ALLOC, device, blk.get("address", addr), blk["requested_size"]
+                        )
+                    addr += size
 
     def _native_buckets(self) -> tuple[dict[str, int], dict[str, int]]:
         """Live bytes and kernel-image bytes per library. torch's own rows are dropped because
@@ -195,7 +233,7 @@ class Watcher:
             self.native.cupti_stop()
 
     def timeline(self):
-        from .timeline import Timeline
+        from .events import Timeline
 
         if self.native is None:
             raise RuntimeError("timeline needs native mode")

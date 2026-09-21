@@ -9,7 +9,9 @@
 #include <execinfo.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <map>
 #include <unordered_map>
 
 #include "common.h"
@@ -42,6 +44,32 @@ std::unordered_map<uint64_t, Live> g_live_ptrs;     // device pointer -> allocat
 std::unordered_map<uint64_t, Live> g_live_handles;  // cuMemCreate handle -> allocation
 std::vector<uint64_t> g_bytes_by_lib{0};
 std::vector<uint64_t> g_images_by_lib{0};
+
+// how long the process sat inside driver allocation calls, which is a stall nobody measures
+struct Stall {
+  uint64_t ns = 0;
+  uint64_t calls = 0;
+};
+std::map<int32_t, Stall> g_stall_by_lib;
+thread_local uint64_t t_api_enter = 0;
+
+uint64_t now_ns() {
+  using clock = std::chrono::steady_clock;
+  return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+             clock::now().time_since_epoch())
+      .count();
+}
+
+void charge_stall(int32_t lib) {
+  if (!t_api_enter) return;
+  uint64_t ns = now_ns() - t_api_enter;
+  t_api_enter = 0;
+  if (lib < 0) return;
+  std::lock_guard<std::mutex> g(g_mu);
+  auto& s = g_stall_by_lib[lib];
+  s.ns += ns;
+  s.calls++;
+}
 
 const char* base(const char* p) {
   const char* s = strrchr(p, '/');
@@ -90,14 +118,17 @@ void account_alloc(uint64_t key, uint64_t size, int32_t lib, bool handle) {
   (handle ? g_live_handles : g_live_ptrs)[key] = Live{size, lib};
 }
 
-void account_free(uint64_t key, bool handle) {
+// returns the library that had allocated it, so the time spent freeing lands on the right row
+int32_t account_free(uint64_t key, bool handle) {
   std::lock_guard<std::mutex> g(g_mu);
   auto& m = handle ? g_live_handles : g_live_ptrs;
   auto it = m.find(key);
-  if (it == m.end()) return;
-  auto& total = g_bytes_by_lib[it->second.lib];
+  if (it == m.end()) return -1;
+  int32_t lib = it->second.lib;
+  auto& total = g_bytes_by_lib[lib];
   total -= std::min(total, it->second.size);
   m.erase(it);
+  return lib;
 }
 
 bool is_module_load(CUpti_CallbackId id) {
@@ -152,7 +183,14 @@ void CUPTIAPI on_cupti(void*, CUpti_CallbackDomain domain, CUpti_CallbackId id, 
     on_module_load(d, exit, failed);
     return;
   }
-  if (!exit || failed) return;
+  if (!exit) {
+    t_api_enter = now_ns();
+    return;
+  }
+  if (failed) {
+    t_api_enter = 0;
+    return;
+  }
 
   const void* P = d->functionParams;
   uint64_t key = 0, size = 0;
@@ -181,20 +219,20 @@ void CUPTIAPI on_cupti(void*, CUpti_CallbackDomain domain, CUpti_CallbackId id, 
     }
     case CUPTI_DRIVER_TRACE_CBID_cuMemFree_v2: {
       key = ((const P_cuMemFree_v2*)P)->dptr;
-      account_free(key, false);
+      charge_stall(account_free(key, false));
       push(Event{now_s(), DRV_FREE, 0, key, 0, 0, 0});
       return;
     }
     case CUPTI_DRIVER_TRACE_CBID_cuMemFreeAsync:
     case CUPTI_DRIVER_TRACE_CBID_cuMemFreeAsync_ptsz: {
       key = ((const P_cuMemFreeAsync*)P)->dptr;
-      account_free(key, false);
+      charge_stall(account_free(key, false));
       push(Event{now_s(), DRV_FREE, 0, key, 0, 0, 0});
       return;
     }
     case CUPTI_DRIVER_TRACE_CBID_cuMemRelease: {
       key = ((const P_cuMemRelease*)P)->handle;
-      account_free(key, true);
+      charge_stall(account_free(key, true));
       push(Event{now_s(), DRV_RELEASE, 0, key, 0, 0, 0});
       return;
     }
@@ -202,6 +240,7 @@ void CUPTIAPI on_cupti(void*, CUpti_CallbackDomain domain, CUpti_CallbackId id, 
       return;
   }
   int32_t lib = caller_lib();
+  charge_stall(lib);
   account_alloc(key, size, lib, handle);
   uint32_t dev = 0;
   cuptiGetDeviceId(d->context, &dev);
@@ -264,6 +303,15 @@ bool cupti_active() { return g_subscribed; }
 CUpti_SubscriberHandle cupti_subscriber() { return g_sub; }
 std::map<std::string, uint64_t> libs() { return by_lib(g_bytes_by_lib); }
 std::map<std::string, uint64_t> kernel_images() { return by_lib(g_images_by_lib); }
+std::map<std::string, std::pair<uint64_t, uint64_t>> stalls() {
+  std::lock_guard<std::mutex> g(g_mu);
+  auto names = lib_names_locked();
+  std::map<std::string, std::pair<uint64_t, uint64_t>> out;
+  for (const auto& [lib, s] : g_stall_by_lib)
+    if ((size_t)lib < names.size()) out[names[lib]] = {s.ns, s.calls};
+  return out;
+}
+
 size_t live_ptrs() { std::lock_guard<std::mutex> g(g_mu); return g_live_ptrs.size(); }
 size_t live_handles() { std::lock_guard<std::mutex> g(g_mu); return g_live_handles.size(); }
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 __version__ = "0.1.0"
 
+from . import events, timeseries  # noqa: F401  imported so they cannot shadow the names below
 from .frag import Explanation, explain
 from .report import Report
 from .snapshot import Snapshot, load
@@ -12,7 +13,7 @@ _watcher = None
 def watch(
     stacks: str | None = None,
     max_entries: int = 200_000,
-    interval_ms: int = 50,
+    interval_ms: int = 200,
     report_dir: str | None = None,
     quiet: bool = False,
     on_report=None,
@@ -22,6 +23,7 @@ def watch(
     """Start watching. Best called before the first CUDA call, but works after too.
 
     stacks: None (cheapest), "python", or "all" (python + C++ frames) for allocation stacks.
+    interval_ms: how often to record a row of memory history in the background.
     mode: "auto" uses the C++ core when it builds, "python" never tries, "native" insists.
     cupti: whether to name the libraries behind non-torch memory; conflicts with torch.profiler.
     """
@@ -42,6 +44,21 @@ def release_cupti() -> None:
     """Hand the CUPTI subscription back so torch.profiler can take it."""
     if _watcher is not None:
         _watcher.release_cupti()
+
+
+def history():
+    """What memory has been doing since watch() started, as rows you can turn into a table."""
+    return watch().history
+
+
+def stalls() -> dict[str, dict[str, float]]:
+    """Time spent inside driver allocation calls, per library. Native mode only."""
+    w = watch()
+    if w.native is None:
+        return {}
+    return {
+        lib: {"seconds": ns / 1e9, "calls": calls} for lib, (ns, calls) in w.native.stalls().items()
+    }
 
 
 def timeline():
@@ -65,9 +82,11 @@ __all__ = [
     "Snapshot",
     "analyze",
     "explain",
+    "history",
     "load",
     "release_cupti",
     "report",
+    "stalls",
     "streams",
     "timeline",
     "watch",
