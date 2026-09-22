@@ -19,6 +19,8 @@ def watch(
     on_report=None,
     mode: str = "auto",
     cupti: str | bool = "auto",
+    warn_at: float = 0.0,
+    track_sites: bool = False,
 ):
     """Start watching. Best called before the first CUDA call, but works after too.
 
@@ -32,7 +34,16 @@ def watch(
         from .hooks_py import Watcher
 
         _watcher = Watcher(
-            stacks, max_entries, interval_ms, report_dir, on_report, quiet, mode, cupti
+            stacks,
+            max_entries,
+            interval_ms,
+            report_dir,
+            on_report,
+            quiet,
+            mode,
+            cupti,
+            warn_at,
+            track_sites,
         ).install()
     return _watcher
 
@@ -49,6 +60,11 @@ def release_cupti() -> None:
 def history():
     """What memory has been doing since watch() started, as rows you can turn into a table."""
     return watch().history
+
+
+def growth(device: int = 0):
+    """Call sites whose live memory keeps climbing over the run, biggest first."""
+    return watch().history.growth(device)
 
 
 def stalls() -> dict[str, dict[str, float]]:
@@ -82,6 +98,7 @@ __all__ = [
     "Snapshot",
     "analyze",
     "explain",
+    "growth",
     "history",
     "load",
     "release_cupti",

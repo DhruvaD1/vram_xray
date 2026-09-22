@@ -26,6 +26,8 @@ class Watcher:
         quiet: bool = False,
         mode: str = "auto",
         cupti: str | bool = "auto",
+        warn_at: float = 0.0,
+        track_sites: bool = False,
     ) -> None:
         self.stacks = stacks
         self.max_entries = max_entries
@@ -40,6 +42,8 @@ class Watcher:
         self.reports: list[Report] = []
         self.mode = mode
         self.cupti = cupti
+        self.warn_at = warn_at
+        self.track_sites = track_sites
         self.native = None
         self.cupti_rc: int | None = None
         self._last: tuple[int, int, float] | None = None
@@ -99,7 +103,15 @@ class Watcher:
         if self.native is not None:
             self.native.install()
             self._seed_mirror()
-        self.history = History(self.nvml, self.uuids, self.native, self.interval_ms).start()
+        self.history = History(
+            self.nvml,
+            self.uuids,
+            self.native,
+            self.interval_ms,
+            warn_at=self.warn_at,
+            on_warn=self._on_threshold,
+            track_sites=self.track_sites,
+        ).start()
         if self.stacks:
             torch.cuda.memory._record_memory_history(
                 enabled="all", stacks=self.stacks, max_entries=self.max_entries
@@ -139,6 +151,23 @@ class Watcher:
         if self.on_report:
             self.on_report(rep)
 
+    def _on_threshold(self, device: int, share: float) -> None:
+        """The device crossed the warning mark. Say so now, while the process is still alive."""
+        try:
+            rep = self.report(device)
+        except Exception as e:
+            print(f"vramxray: could not build warning report: {e!r}", file=sys.stderr)
+            return
+        if not self.quiet:
+            print(
+                f"vramxray: cuda:{device} is at {share:.0%} of the device, "
+                "report follows before it becomes an OOM",
+                file=sys.stderr,
+            )
+            print(str(rep), file=sys.stderr, flush=True)
+        if self.on_report:
+            self.on_report(rep)
+
     def report(
         self,
         device: int | None = None,
@@ -175,18 +204,20 @@ class Watcher:
             allowed_max=allowed_max,
         )
         peak = self.history.peak(device) if self.history else None
+        growth = self.history.growth(device) if self.history else []
         stalls = dict(self.native.stalls()) if self.native is not None else {}
         trend = self.history.largest_free_trend(device) if self.history else 0.0
         rep = Report(
             device,
             ex,
             acc,
-            suggest(ex, acc, trend),
+            suggest(ex, acc, trend, growth),
             request=request,
             rank=_rank(),
             torch_version=torch.__version__,
             peak=peak,
             stalls=stalls,
+            growth=growth,
         )
         self.reports.append(rep)
         return rep

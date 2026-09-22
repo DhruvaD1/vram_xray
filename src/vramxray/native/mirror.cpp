@@ -12,10 +12,16 @@ namespace {
 // gaps at or below this are rounding slack rather than usable free space, see mirror.h
 constexpr uint64_t kSlackBytes = 1u << 20;
 
+// one live allocation: what the caller asked for, and when it was handed out
+struct Live {
+  uint64_t size = 0;
+  double t = 0;
+};
+
 struct Seg {
   uint64_t base = 0;
   uint64_t size = 0;
-  std::map<uint64_t, uint64_t> live;  // block address -> size the caller asked for
+  std::map<uint64_t, Live> live;  // block address -> allocation
   uint64_t live_bytes = 0;
 };
 
@@ -34,9 +40,9 @@ Seg* segment_holding(std::map<uint64_t, Seg>& segs, uint64_t addr) {
 uint64_t largest_gap(const Seg& s) {
   uint64_t best = 0;
   uint64_t cursor = s.base;
-  for (const auto& [addr, size] : s.live) {
+  for (const auto& [addr, blk] : s.live) {
     if (addr > cursor) best = std::max(best, addr - cursor);
-    cursor = addr + size;
+    cursor = addr + blk.size;
   }
   if (s.base + s.size > cursor) best = std::max(best, s.base + s.size - cursor);
   return best > kSlackBytes ? best : 0;
@@ -66,12 +72,12 @@ void mirror_on_trace(int32_t action, int32_t device, uint64_t addr, uint64_t siz
     case TA_ALLOC: {
       Seg* s = segment_holding(segs, addr);
       if (!s) return;  // an allocation we never saw the segment for, so skip it
-      auto [it, fresh] = s->live.emplace(addr, size);
+      auto [it, fresh] = s->live.emplace(addr, Live{size, now_s()});
       if (fresh) {
         s->live_bytes += size;
-      } else if (it->second != size) {
-        s->live_bytes += size - it->second;
-        it->second = size;
+      } else {
+        s->live_bytes += size - it->second.size;
+        it->second = Live{size, now_s()};
       }
       return;
     }
@@ -80,7 +86,7 @@ void mirror_on_trace(int32_t action, int32_t device, uint64_t addr, uint64_t siz
       if (!s) return;
       auto it = s->live.find(addr);
       if (it == s->live.end()) return;
-      s->live_bytes -= std::min(s->live_bytes, it->second);
+      s->live_bytes -= std::min(s->live_bytes, it->second.size);
       s->live.erase(it);
       return;
     }
@@ -89,17 +95,24 @@ void mirror_on_trace(int32_t action, int32_t device, uint64_t addr, uint64_t siz
   }
 }
 
-MirrorStats mirror_stats(int32_t device) {
+MirrorStats mirror_stats(int32_t device, double old_seconds) {
   std::lock_guard<std::mutex> g(g_mu);
   MirrorStats out;
   auto it = g_devices.find(device);
   if (it == g_devices.end()) return out;
+  const double cutoff = now_s() - old_seconds;
   for (const auto& [base, s] : it->second) {
     out.reserved += s.size;
     out.live += s.live_bytes;
     out.segments++;
     out.blocks += (uint32_t)s.live.size();
     out.largest_free = std::max(out.largest_free, largest_gap(s));
+    for (const auto& [addr, blk] : s.live) {
+      if (blk.t < cutoff) {
+        out.old_bytes += blk.size;
+        out.old_blocks++;
+      }
+    }
   }
   out.free_in_segments = out.reserved - std::min(out.reserved, out.live);
   return out;

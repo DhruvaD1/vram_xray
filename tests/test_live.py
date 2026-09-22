@@ -29,3 +29,13 @@ def test_report_without_oom():
     r = vramxray.report()
     assert r.accounting is not None and r.accounting.torch_reserved >= x.numel()
     assert "torch reserved" in str(r)
+
+
+@pytest.mark.gpu
+def test_warning_arrives_before_any_oom(tmp_path):
+    proc = run_script("warn_early.py", cwd=tmp_path)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out[-2000:]
+    assert "WARNINGS 1" in out, "crossing the mark should report exactly once"
+    assert "HAS_ACCOUNTING True" in out
+    assert "OutOfMemoryError" not in out, "the point is to speak before the OOM, not after"

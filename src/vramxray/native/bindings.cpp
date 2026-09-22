@@ -58,15 +58,17 @@ py::list stream_findings() {
   return out;
 }
 
-py::dict mirror_stats(int device) {
-  auto m = vramxray::mirror_stats(device);
+py::dict mirror_stats(int device, double old_seconds) {
+  auto m = vramxray::mirror_stats(device, old_seconds);
   py::dict d;
   d["reserved"] = m.reserved;
   d["live"] = m.live;
   d["free_in_segments"] = m.free_in_segments;
   d["largest_free"] = m.largest_free;
+  d["old_bytes"] = m.old_bytes;
   d["segments"] = m.segments;
   d["blocks"] = m.blocks;
+  d["old_blocks"] = m.old_blocks;
   return d;
 }
 
@@ -96,7 +98,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("streams_stop", &vramxray::streams_stop);
   m.def("streams_findings", &stream_findings, "stream hygiene findings so far");
   m.def("stats", &stats);
-  m.def("mirror_stats", &mirror_stats, py::arg("device") = 0,
+  m.def("mirror_stats", &mirror_stats, py::arg("device") = 0, py::arg("old_seconds") = 60.0,
         "allocator layout numbers kept live from the trace events");
   m.def("mirror_devices", &vramxray::mirror_devices);
   m.def("mirror_event", &vramxray::mirror_on_trace,

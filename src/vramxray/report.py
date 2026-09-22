@@ -9,7 +9,7 @@ from .accounting import Accounting
 from .frag import Explanation
 from .snapshot import fmt_bytes, user_frames
 from .suggest import Suggestion
-from .timeseries import Row
+from .timeseries import Growth, Row
 
 
 @dataclass
@@ -24,6 +24,7 @@ class Report:
     created: float = field(default_factory=time.time)
     peak: Row | None = None  # high water mark seen since watch() started
     stalls: dict[str, tuple[int, int]] = field(default_factory=dict)  # library -> (ns, calls)
+    growth: list[Growth] = field(default_factory=list)  # call sites whose memory keeps climbing
 
     def __str__(self) -> str:
         return render(self)
@@ -56,6 +57,7 @@ class Report:
             },
             "peak": None if self.peak is None else vars(self.peak),
             "stalls": {k: {"ns": ns, "calls": n} for k, (ns, n) in self.stalls.items()},
+            "growth": [vars(g) for g in self.growth],
             "suggestions": [(s.text, s.recovers) for s in self.suggestions],
         }
 
@@ -181,6 +183,13 @@ def render(r: Report) -> str:
                     f"      {b(p.block.size):>10}  holds {b(p.wasted):>10}  {age:<16} "
                     f"{_stack(p.frames)}"
                 )
+    if r.growth:
+        lines.append("    growing over the run:")
+        for g in r.growth[:4]:
+            lines.append(
+                f"      {b(g.bytes_now):>10}  now, up {b(g.bytes_per_minute)}/min "
+                f"over {g.over}  {g.where}"
+            )
     if ex.sites and ex.verdict != "fragmentation":
         lines.append(f"    live memory ({b(ex.live)}) by call site:")
         for s in ex.sites:

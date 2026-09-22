@@ -20,10 +20,26 @@ class Suggestion:
 
 
 def suggest(
-    ex: Explanation, acc: Accounting | None, free_block_trend: float = 0.0
+    ex: Explanation,
+    acc: Accounting | None,
+    free_block_trend: float = 0.0,
+    growth: list | None = None,
 ) -> list[Suggestion]:
     out: list[Suggestion] = []
     req = ex.request or 0
+
+    # memory that climbs every minute is a leak, and no single allocation looks wrong
+    if growth:
+        g = growth[0]
+        out.append(
+            Suggestion(
+                f"{g.where} has grown by {fmt_bytes(g.bytes_per_minute)} per minute over "
+                f"{g.over} and now holds {fmt_bytes(g.bytes_now)}. Something "
+                "there is kept alive between steps, often a list of tensors or a loss that was "
+                "never detached",
+                0,
+            )
+        )
 
     # a biggest free block that keeps shrinking is fragmentation building up over a run, which
     # looks nothing like a single bad allocation and is otherwise very hard to notice

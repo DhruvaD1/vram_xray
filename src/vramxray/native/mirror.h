@@ -32,12 +32,17 @@ struct MirrorStats {
   uint64_t live = 0;              // bytes handed out, as requested by the caller
   uint64_t free_in_segments = 0;  // reserved minus live, so it includes rounding slack
   uint64_t largest_free = 0;      // biggest usable gap, ignoring slack
+  uint64_t old_bytes = 0;         // live bytes allocated more than old_seconds ago
   uint32_t segments = 0;
   uint32_t blocks = 0;
+  uint32_t old_blocks = 0;
 };
 
 void mirror_on_trace(int32_t action, int32_t device, uint64_t addr, uint64_t size);
-MirrorStats mirror_stats(int32_t device);
+
+// old_seconds decides what counts as long lived. Memory still held from early in a run is what
+// a leak looks like, and it costs nothing to measure because the blocks are already walked.
+MirrorStats mirror_stats(int32_t device, double old_seconds = 60.0);
 std::vector<int32_t> mirror_devices();
 void mirror_reset();
 
