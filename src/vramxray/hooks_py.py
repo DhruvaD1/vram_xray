@@ -28,6 +28,7 @@ class Watcher:
         cupti: str | bool = "auto",
         warn_at: float = 0.0,
         track_sites: bool = False,
+        html: bool = True,
     ) -> None:
         self.stacks = stacks
         self.max_entries = max_entries
@@ -44,6 +45,7 @@ class Watcher:
         self.cupti = cupti
         self.warn_at = warn_at
         self.track_sites = track_sites
+        self.html = html
         self.native = None
         self.cupti_rc: int | None = None
         self._last: tuple[int, int, float] | None = None
@@ -141,11 +143,16 @@ class Watcher:
             return
         if not self.quiet:
             print(str(rep), file=sys.stderr, flush=True)
-        path = os.path.join(self.report_dir, _report_name(rep))
+        stem = os.path.join(self.report_dir, _report_name(rep))
         try:
-            rep.write(path)
+            rep.write(stem + ".json")
+            written = stem + ".json"
+            if self.html:
+                rows = self.history.for_device(device) if self.history else []
+                rep.write_html(stem + ".html", rows)
+                written = stem + ".html and .json"
             if not self.quiet:
-                print(f"  full report: {path}", file=sys.stderr, flush=True)
+                print(f"  full report: {written}", file=sys.stderr, flush=True)
         except OSError:
             pass
         if self.on_report:
@@ -296,5 +303,6 @@ def _rank() -> int | None:
 
 
 def _report_name(rep: Report) -> str:
+    """Stem only. The caller adds .json or .html."""
     rank = f"rank{rep.rank}" if rep.rank is not None else f"pid{os.getpid()}"
-    return f"vramxray-oom-{rank}-{time.strftime('%Y%m%dT%H%M%S')}.json"
+    return f"vramxray-oom-{rank}-{time.strftime('%Y%m%dT%H%M%S')}"

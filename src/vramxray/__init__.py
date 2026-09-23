@@ -21,13 +21,19 @@ def watch(
     cupti: str | bool = "auto",
     warn_at: float = 0.0,
     track_sites: bool = False,
+    html: bool = True,
 ):
     """Start watching. Best called before the first CUDA call, but works after too.
 
-    stacks: None (cheapest), "python", or "all" (python + C++ frames) for allocation stacks.
+    stacks: None (cheapest), "python", or "all" (python plus C++ frames) for allocation stacks.
     interval_ms: how often to record a row of memory history in the background.
     mode: "auto" uses the C++ core when it builds, "python" never tries, "native" insists.
-    cupti: whether to name the libraries behind non-torch memory; conflicts with torch.profiler.
+    cupti: whether to name the libraries behind non-torch memory. Conflicts with torch.profiler.
+    warn_at: report before the OOM, once memory passes this mark. A value of 1 or less is a
+        share of the whole device, anything larger is a byte count for this process.
+    track_sites: sample live memory per call site every few seconds so growth() can spot a leak.
+        Off by default because it takes a snapshot, which costs tens of milliseconds.
+    html: also write a page next to the json report when an OOM happens.
     """
     global _watcher
     if _watcher is None:
@@ -44,6 +50,7 @@ def watch(
             cupti,
             warn_at,
             track_sites,
+            html,
         ).install()
     return _watcher
 
@@ -60,6 +67,23 @@ def release_cupti() -> None:
 def history():
     """What memory has been doing since watch() started, as rows you can turn into a table."""
     return watch().history
+
+
+def html(path: str = "vramxray.html", device: int | None = None) -> str:
+    """Write the current report as a page, with the segment map drawn to scale."""
+    w = watch()
+    rep = w.report(device)
+    from .html import write
+
+    rows = w.history.for_device(rep.device) if w.history else []
+    return write(
+        path,
+        ex=rep.explanation,
+        acc=rep.accounting,
+        rows=rows,
+        suggestions=rep.suggestions,
+        title=f"vramxray cuda:{rep.device}",
+    )
 
 
 def growth(device: int = 0):
@@ -100,6 +124,7 @@ __all__ = [
     "explain",
     "growth",
     "history",
+    "html",
     "load",
     "release_cupti",
     "report",

@@ -148,6 +148,12 @@ def cmd_analyze(a: argparse.Namespace) -> int:
         with open(a.json, "w") as f:
             json.dump(out, f, indent=1)
         print(f"wrote {a.json}")
+    if a.html:
+        from .html import write
+
+        d = devices[0]
+        write(path=a.html, ex=explain(snap, d, request=a.request), title=f"vramxray cuda:{d}")
+        print(f"wrote {a.html}")
     return 0
 
 
@@ -223,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     an.add_argument("--top", type=int, default=8)
     an.add_argument("--json")
+    an.add_argument("--html", help="write a page with the segment map drawn to scale")
     an.set_defaults(fn=cmd_analyze)
     rn = sub.add_parser("run", help="run a script with vramxray.watch() already on")
     rn.add_argument("script")

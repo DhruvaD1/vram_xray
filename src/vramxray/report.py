@@ -61,6 +61,19 @@ class Report:
             "suggestions": [(s.text, s.recovers) for s in self.suggestions],
         }
 
+    def write_html(self, path: str, rows: list[Row] | None = None) -> str:
+        """A page you can open, and attach to a bug report. rows draws the timeline."""
+        from .html import write
+
+        return write(
+            path,
+            ex=self.explanation,
+            acc=self.accounting,
+            rows=rows or [],
+            suggestions=self.suggestions,
+            title=f"vramxray cuda:{self.device}",
+        )
+
     def write(self, path: str) -> str:
         with open(path, "w") as f:
             json.dump(self.to_dict(), f, indent=1)

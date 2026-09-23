@@ -72,6 +72,7 @@ class Explanation:
     # but still ignores PYTORCH_ALLOC_CONF, so take the name from the snapshot instead of guessing
     alloc_conf_var: str = "PYTORCH_CUDA_ALLOC_CONF"
     expandable_on: bool = False
+    segments: list[Segment] = field(default_factory=list)  # every segment on the device
 
 
 @dataclass
@@ -296,6 +297,7 @@ def explain(
         cap,
         alloc_conf_var(snap.settings),
         bool(snap.settings.get("expandable_segments", False)),
+        segments,
     )
 
 

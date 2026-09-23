@@ -213,3 +213,36 @@ def test_public_names_are_not_shadowed_by_their_modules():
 
     for name in ("report", "timeline", "history", "watch", "analyze", "stalls"):
         assert callable(getattr(vramxray, name)), f"{name} is not callable"
+
+
+def test_html_page_is_self_contained_and_to_scale():
+    from html.parser import HTMLParser
+
+    from vramxray import load
+    from vramxray.html import render
+
+    ex = explain(load("tests/snapshots/split_remainder.pickle"))
+    page = render(ex, title="test")
+
+    class Check(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.open: list[str] = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag not in ("meta", "br", "img", "input", "polyline", "polygon"):
+                self.open.append(tag)
+
+        def handle_endtag(self, tag):
+            if self.open and self.open[-1] == tag:
+                self.open.pop()
+
+    check = Check()
+    check.feed(page)
+    assert check.open == [], f"unclosed tags: {check.open}"
+    # nothing may be fetched from the network, the page gets opened on other machines
+    assert "http://" not in page and "https://" not in page
+    assert "<script src" not in page and "@import" not in page
+    # the 4 MiB block holding a 500 MiB hole open must be drawn at its true size and pointed at
+    assert 'style="width:97.6562%"' in page
+    assert 'class="mark"' in page and "4.0 MiB" in page
