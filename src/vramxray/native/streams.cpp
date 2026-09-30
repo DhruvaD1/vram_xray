@@ -17,6 +17,11 @@
 #include "common.h"
 #include "cupti_attr.h"
 
+namespace {
+// guards the finding counters and the capture bookkeeping
+std::mutex g_streams_mu;
+}  // namespace
+
 namespace vramxray {
 
 namespace {
@@ -65,7 +70,7 @@ std::map<uint32_t, std::set<uint32_t>> g_channel_streams;  // channelID -> strea
 void note(int kind, CUpti_CallbackId cbid, const char* api) {
   bool sample;
   {
-    std::lock_guard<std::mutex> g(g_mu);
+    std::lock_guard<std::mutex> g(g_streams_mu);
     auto& c = g_findings[{kind, (uint32_t)cbid}];
     if (c.api.empty()) c.api = api ? api : "?";
     c.count++;
@@ -74,7 +79,7 @@ void note(int kind, CUpti_CallbackId cbid, const char* api) {
   }
   if (!sample) return;
   int32_t lib = caller_lib();
-  std::lock_guard<std::mutex> g(g_mu);
+  std::lock_guard<std::mutex> g(g_streams_mu);
   g_findings[{kind, (uint32_t)cbid}].libs.insert(lib);
 }
 
@@ -82,13 +87,13 @@ bool any_capture() { return g_capture_depth.load(std::memory_order_relaxed) > 0;
 
 bool is_capturing(CUstream s) {
   if (t_capturing.count(s)) return true;
-  std::lock_guard<std::mutex> g(g_mu);
+  std::lock_guard<std::mutex> g(g_streams_mu);
   return g_global_capturing.count(s) > 0;
 }
 
 void begin_capture(CUstream s, CUstreamCaptureMode mode) {
   if (mode == CU_STREAM_CAPTURE_MODE_GLOBAL) {
-    std::lock_guard<std::mutex> g(g_mu);
+    std::lock_guard<std::mutex> g(g_streams_mu);
     g_global_capturing.insert(s);
   } else {
     t_capturing.insert(s);
@@ -99,7 +104,7 @@ void begin_capture(CUstream s, CUstreamCaptureMode mode) {
 void end_capture(CUstream s) {
   bool had = t_capturing.erase(s) > 0;
   {
-    std::lock_guard<std::mutex> g(g_mu);
+    std::lock_guard<std::mutex> g(g_streams_mu);
     had = g_global_capturing.erase(s) > 0 || had;
     if (g_global_capturing.empty()) g_capture_events.clear();
   }
@@ -110,7 +115,7 @@ void end_capture(CUstream s) {
 void join_capture(CUstream s, CUevent e) {
   bool joined;
   {
-    std::lock_guard<std::mutex> g(g_mu);
+    std::lock_guard<std::mutex> g(g_streams_mu);
     auto it = g_capture_events.find(e);
     if (it == g_capture_events.end()) return;
     joined = true;
@@ -178,7 +183,7 @@ void CUPTIAPI buf_complete(CUcontext, uint32_t, uint8_t* buf, size_t, size_t val
   while (cuptiActivityGetNextRecord(buf, valid, &rec) == CUPTI_SUCCESS) {
     if (rec->kind != CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL && rec->kind != CUPTI_ACTIVITY_KIND_KERNEL) continue;
     auto* k = (const CUpti_ActivityKernel9*)rec;
-    std::lock_guard<std::mutex> g(g_mu);
+    std::lock_guard<std::mutex> g(g_streams_mu);
     g_channel_streams[k->channelID].insert(k->streamId);
   }
   free(buf);
@@ -267,7 +272,7 @@ void streams_on_callback(CUpti_CallbackId id, const CUpti_CallbackData* d, bool 
     case CUPTI_DRIVER_TRACE_CBID_cuEventRecordWithFlags_ptsz: {
       auto* p = (const P_cuEventRecord*)P;  // WithFlags has the same first two fields
       if (is_capturing(p->hStream)) {
-        std::lock_guard<std::mutex> g(g_mu);
+        std::lock_guard<std::mutex> g(g_streams_mu);
         g_capture_events[p->hEvent] = true;
       }
       return;
@@ -293,8 +298,8 @@ void streams_on_callback(CUpti_CallbackId id, const CUpti_CallbackData* d, bool 
 std::vector<Finding> streams_findings() {
   if (g_channels) cuptiActivityFlushAll(0);
   std::vector<Finding> out;
-  std::lock_guard<std::mutex> g(g_mu);
-  auto names = lib_names_locked();
+  const std::vector<std::string> names = lib_names();
+  std::lock_guard<std::mutex> g(g_streams_mu);
   for (auto& [key, c] : g_findings) {
     std::string libs;
     for (int32_t id : c.libs) {

@@ -27,6 +27,10 @@ from .snapshot import from_dict
 SITE_SAMPLE_BUDGET = 0.005
 MIN_SITE_INTERVAL = 5.0
 FIRST_SITE_DELAY = 10.0
+# The native path is cheap, but every sample keeps a reference per live block, so it runs once
+# every this many history ticks rather than on all of them.
+NATIVE_SITE_EVERY = 10
+MIN_NATIVE_SITE_INTERVAL = 1.0
 
 
 @dataclass
@@ -70,7 +74,8 @@ class History:
     # a fraction of the device when it is 1 or less, otherwise an absolute byte count
     warn_at: float = 0.0
     on_warn: Callable[[int, float], None] | None = None
-    track_sites: bool = False
+    # "auto" samples call sites whenever the native core can do it without a snapshot
+    track_sites: bool | str = "auto"
     rows: deque[Row] = field(default_factory=deque)
     site_rows: deque[tuple[float, int, dict[str, int]]] = field(default_factory=deque)
     started: float = field(default_factory=time.monotonic)
@@ -82,7 +87,9 @@ class History:
 
     def start(self) -> History:
         self.rows = deque(maxlen=self.keep)
-        self._next_site = time.monotonic() + FIRST_SITE_DELAY
+        # the native path touches no Python, so it does not need to wait for imports to settle
+        delay = self._native_site_interval() if self.native is not None else FIRST_SITE_DELAY
+        self._next_site = time.monotonic() + delay
         self._thread = threading.Thread(target=self._run, name="vramxray-history", daemon=True)
         self._thread.start()
         return self
@@ -114,9 +121,19 @@ class History:
             out.append(row)
             self.rows.append(row)
             self._check_threshold(device, row)
-        if self.track_sites and time.monotonic() >= self._next_site:
+        if self._sites_native() and time.monotonic() >= self._next_site:
+            self._sample_sites_native()
+            self._next_site = time.monotonic() + self._native_site_interval()
+        elif self.track_sites is True and time.monotonic() >= self._next_site:
             self._sample_sites()
         return out
+
+    def _native_site_interval(self) -> float:
+        return max(MIN_NATIVE_SITE_INTERVAL, self.interval_ms / 1000 * NATIVE_SITE_EVERY)
+
+    def _sites_native(self) -> bool:
+        """The native core reads live bytes per site straight out of its mirror, no snapshot."""
+        return self.native is not None and self.track_sites is not False
 
     def _check_threshold(self, device: int, row: Row) -> None:
         """Say something while the process is still alive, rather than only after it dies."""
@@ -138,6 +155,14 @@ class History:
         self._warned.add(device)
         share = used / mem.total if mem and mem.total else 0.0
         self.on_warn(device, share)
+
+    def _sample_sites_native(self) -> None:
+        """Record a sample. Names stay unresolved, because resolving them runs Python and this
+        is a background thread."""
+        import torch
+
+        for device in range(torch.cuda.device_count()):
+            self.native.mirror_sample_sites(device)
 
     def _sample_sites(self) -> None:
         """Record live bytes per call site, and pick the next interval from what it just cost."""
@@ -172,12 +197,24 @@ class History:
         rows = self.for_device(device)
         return max(rows, key=lambda r: r.reserved) if rows else None
 
+    def site_series(self, device: int = 0) -> list[tuple[float, dict[str, int]]]:
+        """Live bytes per call site over time, resolved now rather than while sampling."""
+        if self._sites_native():
+            history = self.native.mirror_site_history()
+            base = history[0][0] if history else 0.0
+            return [
+                (t - base, {b["where"]: b["bytes"] for b in sites})
+                for t, dev, sites in history
+                if dev == device
+            ]
+        return [(t, s) for t, d, s in self.site_rows if d == device]
+
     def growth(self, device: int = 0, min_bytes_per_minute: int = 1 << 20) -> list[Growth]:
         """Call sites whose live memory keeps climbing, which is what a leak looks like.
 
         Needs at least two site samples, so a short run reports nothing.
         """
-        rows = [(t, s) for t, d, s in self.site_rows if d == device]
+        rows = self.site_series(device)
         if len(rows) < 2:
             return []
         (t0, first), (t1, last) = rows[0], rows[-1]

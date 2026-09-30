@@ -20,7 +20,7 @@ def watch(
     mode: str = "auto",
     cupti: str | bool = "auto",
     warn_at: float = 0.0,
-    track_sites: bool = False,
+    track_sites: bool | str = "auto",
     html: bool = True,
 ):
     """Start watching. Best called before the first CUDA call, but works after too.
@@ -31,8 +31,9 @@ def watch(
     cupti: whether to name the libraries behind non-torch memory. Conflicts with torch.profiler.
     warn_at: report before the OOM, once memory passes this mark. A value of 1 or less is a
         share of the whole device, anything larger is a byte count for this process.
-    track_sites: sample live memory per call site every few seconds so growth() can spot a leak.
-        Off by default because it takes a snapshot, which costs tens of milliseconds.
+    track_sites: sample live memory per call site so growth() can spot a leak. "auto" uses the
+        native core, which reads it out of its own mirror for about 0.06 ms. True forces the
+        snapshot fallback in pure mode, which costs tens of milliseconds. False turns it off.
     html: also write a page next to the json report when an OOM happens.
     """
     global _watcher

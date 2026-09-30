@@ -27,7 +27,7 @@ class Watcher:
         mode: str = "auto",
         cupti: str | bool = "auto",
         warn_at: float = 0.0,
-        track_sites: bool = False,
+        track_sites: bool | str = "auto",
         html: bool = True,
     ) -> None:
         self.stacks = stacks
@@ -213,6 +213,7 @@ class Watcher:
         peak = self.history.peak(device) if self.history else None
         growth = self.history.growth(device) if self.history else []
         stalls = dict(self.native.stalls()) if self.native is not None else {}
+        pools = list(self.native.mirror_pools(device)) if self.native is not None else []
         trend = self.history.largest_free_trend(device) if self.history else 0.0
         rep = Report(
             device,
@@ -225,6 +226,7 @@ class Watcher:
             peak=peak,
             stalls=stalls,
             growth=growth,
+            pools=pools,
         )
         self.reports.append(rep)
         return rep

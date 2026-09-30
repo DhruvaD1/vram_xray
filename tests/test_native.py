@@ -47,3 +47,16 @@ def test_mirror_matches_torch_and_the_snapshot(tmp_path):
     assert int(out.split("WORST_RESERVED ")[1].split()[0]) == 0, "reserved drifted from torch"
     # a hole can be off by the rounding slack torch leaves inside a block, but no more
     assert int(out.split("WORST_HOLE ")[1].split()[0]) <= (1 << 20), "hole size drifted too far"
+
+
+@pytest.mark.gpu
+def test_graph_private_pools_are_attributed(tmp_path):
+    """Memory captured into a CUDA graph pool never returns to the general pool, so say so."""
+    proc = run_script("graph_pools.py", cwd=tmp_path)
+    out = _out(proc)
+    assert proc.returncode == 0, quiet(out)[-2000:]
+    assert "POOLS_BEFORE 0" in out, "no graph has been captured yet"
+    after = int(out.split("POOLS_AFTER ")[1].split()[0])
+    held = int(out.split("BYTES ")[1].split()[0])
+    assert after >= 1 and held > 0, "the captured graph should hold memory in its own pool"
+    assert "REPORT_LINE True" in out

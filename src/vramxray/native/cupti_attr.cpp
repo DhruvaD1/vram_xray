@@ -18,6 +18,11 @@
 #include "nvml_shim.h"
 #include "streams.h"
 
+namespace {
+// guards the live maps, the per-library totals and the stall counters
+std::mutex g_attr_mu;
+}  // namespace
+
 namespace vramxray {
 
 namespace {
@@ -39,7 +44,7 @@ CUpti_SubscriberHandle g_sub = nullptr;
 bool g_subscribed = false;
 std::string g_self;  // basename of this .so, skipped when walking the stack
 
-// all guarded by g_mu from common.h
+// all guarded by g_attr_mu
 std::unordered_map<uint64_t, Live> g_live_ptrs;     // device pointer -> allocation
 std::unordered_map<uint64_t, Live> g_live_handles;  // cuMemCreate handle -> allocation
 std::vector<uint64_t> g_bytes_by_lib{0};
@@ -65,7 +70,7 @@ void charge_stall(int32_t lib) {
   uint64_t ns = now_ns() - t_api_enter;
   t_api_enter = 0;
   if (lib < 0) return;
-  std::lock_guard<std::mutex> g(g_mu);
+  std::lock_guard<std::mutex> g(g_attr_mu);
   auto& s = g_stall_by_lib[lib];
   s.ns += ns;
   s.calls++;
@@ -97,11 +102,11 @@ int32_t caller_lib() {
       continue;
     }
     if (past) {
-      std::lock_guard<std::mutex> g(g_mu);
+      std::lock_guard<std::mutex> g(libs_mu());
       return lib_id_locked(b);
     }
   }
-  std::lock_guard<std::mutex> g(g_mu);
+  std::lock_guard<std::mutex> g(libs_mu());
   return lib_id_locked("unknown");
 }
 
@@ -112,7 +117,7 @@ void grow(std::vector<uint64_t>& v, int32_t id) {
 }
 
 void account_alloc(uint64_t key, uint64_t size, int32_t lib, bool handle) {
-  std::lock_guard<std::mutex> g(g_mu);
+  std::lock_guard<std::mutex> g(g_attr_mu);
   grow(g_bytes_by_lib, lib);
   g_bytes_by_lib[lib] += size;
   (handle ? g_live_handles : g_live_ptrs)[key] = Live{size, lib};
@@ -120,7 +125,7 @@ void account_alloc(uint64_t key, uint64_t size, int32_t lib, bool handle) {
 
 // returns the library that had allocated it, so the time spent freeing lands on the right row
 int32_t account_free(uint64_t key, bool handle) {
-  std::lock_guard<std::mutex> g(g_mu);
+  std::lock_guard<std::mutex> g(g_attr_mu);
   auto& m = handle ? g_live_handles : g_live_ptrs;
   auto it = m.find(key);
   if (it == m.end()) return -1;
@@ -164,14 +169,16 @@ void on_module_load(const CUpti_CallbackData* d, bool exit, bool failed) {
   uint64_t grew = (uint64_t)(after - t_used_before);
   int32_t lib = caller_lib();
   {
-    std::lock_guard<std::mutex> g(g_mu);
+    std::lock_guard<std::mutex> g(g_attr_mu);
     grow(g_images_by_lib, lib);
     g_images_by_lib[lib] += grew;
   }
   push(Event{now_s(), DRV_MODULE, (int32_t)t_dev, 0, grew, 0, lib});
 }
 
-void CUPTIAPI on_cupti(void*, CUpti_CallbackDomain domain, CUpti_CallbackId id, const void* info) {
+// the CUDA driver calls this, so nothing may escape it
+void CUPTIAPI on_cupti(
+    void*, CUpti_CallbackDomain domain, CUpti_CallbackId id, const void* info) noexcept try {
   if (domain != CUPTI_CB_DOMAIN_DRIVER_API) return;
   auto* d = (const CUpti_CallbackData*)info;
   const bool exit = d->callbackSite == CUPTI_API_EXIT;
@@ -245,11 +252,13 @@ void CUPTIAPI on_cupti(void*, CUpti_CallbackDomain domain, CUpti_CallbackId id, 
   uint32_t dev = 0;
   cuptiGetDeviceId(d->context, &dev);
   push(Event{now_s(), kind, (int32_t)dev, key, size, 0, lib});
+} catch (...) {
 }
 
+// takes one lock at a time, never both, see the lock note in common.h
 std::map<std::string, uint64_t> by_lib(const std::vector<uint64_t>& v) {
-  std::lock_guard<std::mutex> g(g_mu);
-  auto names = lib_names_locked();
+  const std::vector<std::string> names = lib_names();
+  std::lock_guard<std::mutex> g(g_attr_mu);
   std::map<std::string, uint64_t> out;
   for (size_t i = 0; i < v.size() && i < names.size(); i++)
     if (v[i]) out[names[i]] = v[i];
@@ -304,15 +313,15 @@ CUpti_SubscriberHandle cupti_subscriber() { return g_sub; }
 std::map<std::string, uint64_t> libs() { return by_lib(g_bytes_by_lib); }
 std::map<std::string, uint64_t> kernel_images() { return by_lib(g_images_by_lib); }
 std::map<std::string, std::pair<uint64_t, uint64_t>> stalls() {
-  std::lock_guard<std::mutex> g(g_mu);
-  auto names = lib_names_locked();
+  const std::vector<std::string> names = lib_names();
+  std::lock_guard<std::mutex> g(g_attr_mu);
   std::map<std::string, std::pair<uint64_t, uint64_t>> out;
   for (const auto& [lib, s] : g_stall_by_lib)
     if ((size_t)lib < names.size()) out[names[lib]] = {s.ns, s.calls};
   return out;
 }
 
-size_t live_ptrs() { std::lock_guard<std::mutex> g(g_mu); return g_live_ptrs.size(); }
-size_t live_handles() { std::lock_guard<std::mutex> g(g_mu); return g_live_handles.size(); }
+size_t live_ptrs() { std::lock_guard<std::mutex> g(g_attr_mu); return g_live_ptrs.size(); }
+size_t live_handles() { std::lock_guard<std::mutex> g(g_attr_mu); return g_live_handles.size(); }
 
 }  // namespace vramxray

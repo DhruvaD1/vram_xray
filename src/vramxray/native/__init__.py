@@ -79,7 +79,8 @@ def load(verbose: bool = False):
                 f"-Wl,-rpath,{cupti_lib}",
                 "-ldl",
             ],
-            extra_cflags=["-O2", "-std=c++17"],
+            # warnings on, because nothing here is compiled often enough to notice a mistake
+            extra_cflags=["-O2", "-std=c++17", "-Wall", "-Wextra", "-Wno-unused-parameter"],
             verbose=verbose,
         )
     except Exception as e:  # build failures are expected on machines without a toolchain

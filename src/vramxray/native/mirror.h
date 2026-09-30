@@ -12,7 +12,13 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <string>
 #include <vector>
+
+namespace c10 {
+struct GatheredContext;
+}
 
 namespace vramxray {
 
@@ -38,7 +44,46 @@ struct MirrorStats {
   uint32_t old_blocks = 0;
 };
 
-void mirror_on_trace(int32_t action, int32_t device, uint64_t addr, uint64_t size);
+// live bytes grouped by the line that allocated them, without taking a snapshot
+struct SiteBytes {
+  std::string where;
+  uint64_t bytes;
+  uint32_t blocks;
+};
+
+// memory held by a CUDA graph's private pool, which never comes back to the general pool
+struct PoolBytes {
+  uint64_t id0;
+  uint64_t id1;
+  uint64_t bytes;
+  uint32_t blocks;
+};
+
+void mirror_on_trace(
+    int32_t action,
+    int32_t device,
+    uint64_t addr,
+    uint64_t size,
+    uint64_t pool0 = 0,
+    uint64_t pool1 = 0,
+    std::shared_ptr<c10::GatheredContext> context = nullptr);
+
+// Symbolizing a stack is expensive, so only the biggest `scan` live blocks are resolved. The
+// small ones never move the total, and this is what makes site tracking cheap enough to leave on.
+std::vector<SiteBytes> mirror_top_sites(int32_t device, size_t top = 8, size_t scan = 512);
+
+// One sample of the biggest live blocks, stored without resolving any names. Symbolizing runs
+// Python, and doing that on a background thread while the program is importing its own modules
+// has been seen to break those imports, so sampling and naming are kept apart.
+struct SiteSample {
+  double t;
+  int32_t device;
+  std::vector<SiteBytes> sites;
+};
+
+void mirror_sample_sites(int32_t device, size_t top = 4096);
+std::vector<SiteSample> mirror_site_history();  // resolves names, call it from the main thread
+std::vector<PoolBytes> mirror_pools(int32_t device);
 
 // old_seconds decides what counts as long lived. Memory still held from early in a run is what
 // a leak looks like, and it costs nothing to measure because the blocks are already walked.

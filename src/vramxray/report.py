@@ -25,6 +25,7 @@ class Report:
     peak: Row | None = None  # high water mark seen since watch() started
     stalls: dict[str, tuple[int, int]] = field(default_factory=dict)  # library -> (ns, calls)
     growth: list[Growth] = field(default_factory=list)  # call sites whose memory keeps climbing
+    pools: list[dict] = field(default_factory=list)  # memory held inside CUDA graph private pools
 
     def __str__(self) -> str:
         return render(self)
@@ -58,6 +59,7 @@ class Report:
             "peak": None if self.peak is None else vars(self.peak),
             "stalls": {k: {"ns": ns, "calls": n} for k, (ns, n) in self.stalls.items()},
             "growth": [vars(g) for g in self.growth],
+            "graph_pools": self.pools,
             "suggestions": [(s.text, s.recovers) for s in self.suggestions],
         }
 
@@ -155,6 +157,15 @@ def render(r: Report) -> str:
         lines.append(
             f"    peak so far         {b(r.peak.reserved):>11}   reserved at t={r.peak.t:.0f}s, "
             f"{b(over)} above now"
+        )
+    if r.pools:
+        held = sum(p["bytes"] for p in r.pools)
+        lines.append(
+            _row(
+                "CUDA graph pools",
+                held,
+                f"{len(r.pools)} pool(s), not reusable until the graphs are freed",
+            )
         )
     if r.stalls:
         total_ns = sum(ns for ns, _ in r.stalls.values())

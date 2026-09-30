@@ -12,7 +12,7 @@ import torch.nn as nn
 
 import vramxray
 
-vramxray.watch(stacks="python", mode="native", interval_ms=100, track_sites=True)
+vramxray.watch(stacks="python", mode="native", interval_ms=100)
 
 model = nn.Sequential(nn.Linear(2048, 2048), nn.ReLU(), nn.Linear(2048, 2048)).cuda()
 opt = torch.optim.SGD(model.parameters(), lr=0.01)
@@ -31,7 +31,7 @@ for _ in range(220):
 torch.cuda.synchronize()
 time.sleep(1.0)
 
-print("site samples:", len(vramxray.history().site_rows))
+print("site samples:", len(vramxray.history().site_series(0)))
 for g in vramxray.growth():
     print(f"GROWTH {g.bytes_per_minute / (1 << 20):.1f} MiB/min over {g.seconds:.0f}s  {g.where}")
 print(vramxray.report())

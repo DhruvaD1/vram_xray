@@ -34,19 +34,29 @@ static_assert((int)TraceEntry::Action::SEGMENT_FREE == TA_SEGMENT_FREE);
 static_assert((int)TraceEntry::Action::SEGMENT_MAP == TA_SEGMENT_MAP);
 static_assert((int)TraceEntry::Action::SEGMENT_UNMAP == TA_SEGMENT_UNMAP);
 
-void on_trace(const TraceEntry& e) {
-  mirror_on_trace((int32_t)e.action_, (int32_t)e.device_, (uint64_t)e.addr_, (uint64_t)e.size_);
+// torch calls this from inside the allocator, so an escaping exception would unwind through
+// C++ that is not expecting it. Losing an event is always better than that.
+void on_trace(const TraceEntry& e) noexcept try {
+  mirror_on_trace(
+      (int32_t)e.action_,
+      (int32_t)e.device_,
+      (uint64_t)e.addr_,
+      (uint64_t)e.size_,
+      (uint64_t)e.mempool_.first,
+      (uint64_t)e.mempool_.second,
+      e.context_);
   int32_t ctx = -1;
   if (e.context_) {
     // torch already gathered the stack (record_memory_history is on). Keep it, symbolize later
-    std::lock_guard<std::mutex> g(g_mu);
+    std::lock_guard<std::mutex> g(events_mu());
     ctx = keep_context_locked(e.context_);
   }
   push(Event{now_s(), (int32_t)e.action_, (int32_t)e.device_, (uint64_t)e.addr_,
              (uint64_t)e.size_, (uint64_t)(uintptr_t)e.stream_, 0, ctx});
+} catch (...) {
 }
 
-void on_oom(int64_t, size_t, size_t, size_t) { g_oom_calls++; }
+void on_oom(int64_t, size_t, size_t, size_t) noexcept { g_oom_calls++; }
 }  // namespace
 
 void install() {
