@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # weekly, so a change in torch shows up here rather than in someone's training run
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_SYSTEM_PYTHON: 0
 
 jobs:
   lint:
@@ -12,32 +22,143 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv venv && uv pip install ruff
-      - run: .venv/bin/ruff format --check src tests && .venv/bin/ruff check src tests
+        with:
+          enable-cache: true
+      - run: uv venv --python 3.12
+      - run: uv pip install ruff
+      - name: format
+        run: .venv/bin/ruff format --check src tests tools
+      - name: lint
+        run: .venv/bin/ruff check src tests tools
 
-  pure:
+  # Every C++ file has to compile, and that needs only headers
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv venv --python 3.12
+      - name: headers only, no GPU needed
+        run: |
+          uv pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+          uv pip install nvidia-cuda-runtime-cu12 nvidia-cuda-nvcc-cu12 nvidia-cuda-cupti-cu12
+      - run: .venv/bin/python tools/cpp_check.py
+
+  test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.12"]
-        torch: ["2.5.1", "2.7.1", "2.9.1"]
-        exclude:
-          - python: "3.12"
+        include:
+          - python: "3.10"
             torch: "2.5.1"
+          - python: "3.10"
+            torch: "2.7.1"
+          - python: "3.12"
+            torch: "2.7.1"
+          - python: "3.12"
+            torch: "2.9.1"
+          - python: "3.13"
+            torch: "2.9.1"
+    name: test (py${{ matrix.python }}, torch ${{ matrix.torch }})
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - run: uv venv --python ${{ matrix.python }}
       - run: uv pip install "torch==${{ matrix.torch }}" --index-url https://download.pytorch.org/whl/cpu
       - run: uv pip install -e ".[dev]"
+      # the GPU tests skip themselves here, what runs is the snapshot parsing and the analysis
       - run: .venv/bin/python -m pytest -q
+      - name: command line, on a dump rather than a device
+        run: |
+          .venv/bin/vramxray --version
+          .venv/bin/vramxray analyze tests/snapshots/split_remainder.pickle
+          .venv/bin/vramxray analyze tests/snapshots/split_remainder.pickle --request 1.5G
+          .venv/bin/vramxray analyze tests/snapshots/split_remainder.pickle --json out.json --html out.html
+          .venv/bin/python - <<'EOF'
+          import json, pathlib
+          report = json.loads(pathlib.Path("out.json").read_text())
+          assert report["0"]["verdict"] == "fragmentation", report["0"]["verdict"]
+          page = pathlib.Path("out.html").read_text()
+          assert "segment" in page and "https://" not in page, "the page must stand alone"
+          print("cli ok")
+          EOF
 
-  # everything, on a machine with a GPU. Self hosted runner, started by hand until there is one.
+  # Reading a data someone sent you should not need torch, a GPU, or a compiler.
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv venv --python 3.12
+      - run: uv pip install -e ".[dev]"
+      - name: torch must not be installed
+        run: .venv/bin/python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('torch') is not None)"
+      - run: .venv/bin/python -m pytest -q
+      - run: .venv/bin/vramxray analyze tests/snapshots/split_remainder.pickle --html out.html
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv venv --python 3.12
+      - run: uv pip install build
+      - run: .venv/bin/python -m build
+      - name: the C++ has to ship, or vramxray[native] cannot build on the user's machine
+        run: |
+          .venv/bin/python - <<'EOF'
+          import glob, tarfile, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          sources = sorted(n.rsplit("/", 1)[-1] for n in names if "/native/" in n and n.endswith((".cpp", ".h")))
+          assert len(sources) >= 12, sources
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          assert any("/native/" in n for n in tarfile.open(sdist).getnames())
+          print(wheel, "carries", len(sources), "native sources")
+          EOF
+      - name: install the wheel somewhere clean and use it
+        run: |
+          uv venv --python 3.12 /tmp/fresh
+          uv pip install --python /tmp/fresh/bin/python dist/*.whl
+          cd /tmp
+          /tmp/fresh/bin/vramxray --version
+          /tmp/fresh/bin/python -c "import vramxray; print('import ok', vramxray.__version__)"
+          /tmp/fresh/bin/vramxray analyze ${{ github.workspace }}/tests/snapshots/split_remainder.pickle
+
+  # Allowed to fail. It is an early warning that torch changed something under us, not a gate.
+  nightly:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv venv --python 3.12
+      - run: uv pip install --prerelease allow --index-url https://download.pytorch.org/whl/nightly/cpu torch
+      - run: uv pip install -e ".[dev]"
+      - run: .venv/bin/python -m pytest -q
+      - run: uv pip install nvidia-cuda-runtime-cu12 nvidia-cuda-nvcc-cu12 nvidia-cuda-cupti-cu12
+      - run: .venv/bin/python tools/cpp_check.py
+
+  # Everything, on a machine with a device. Needs a self hosted runner labelled gpu.
   gpu:
     if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, gpu]
     steps:
       - uses: actions/checkout@v4
-      - run: uv venv && uv pip install torch --index-url https://download.pytorch.org/whl/cu128 && uv pip install -e ".[dev]"
-      - run: .venv/bin/python -m pytest -q -m gpu
+      - run: uv venv --python 3.12
+      - run: uv pip install torch --index-url https://download.pytorch.org/whl/cu128
+      - run: uv pip install -e ".[dev]"
+      - run: .venv/bin/python -m pytest -q
+      - run: .venv/bin/python tests/stress/run_all.py

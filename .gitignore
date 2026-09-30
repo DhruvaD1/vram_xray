@@ -21,7 +21,7 @@ native/build/
 *.swp
 .DS_Store
 
-vramxray-oom-*.json
+vramxray-oom-*
 
 tests/snapshots/*.pickle
 !tests/snapshots/split_remainder.pickle
