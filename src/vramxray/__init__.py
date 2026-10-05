@@ -4,6 +4,7 @@ __version__ = "0.1.0"
 
 from . import events, timeseries  # noqa: F401  imported so they cannot shadow the names below
 from .frag import Explanation, explain
+from .regions import region, tagged
 from .report import Report
 from .snapshot import Snapshot, load
 
@@ -127,10 +128,13 @@ __all__ = [
     "history",
     "html",
     "load",
+    "region",
+    "regions",
     "release_cupti",
     "report",
     "stalls",
     "streams",
+    "tagged",
     "timeline",
     "watch",
     "__version__",

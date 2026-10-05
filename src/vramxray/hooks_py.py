@@ -214,6 +214,7 @@ class Watcher:
         growth = self.history.growth(device) if self.history else []
         stalls = dict(self.native.stalls()) if self.native is not None else {}
         pools = list(self.native.mirror_pools(device)) if self.native is not None else []
+        regions = list(self.native.mirror_regions(device)) if self.native is not None else []
         trend = self.history.largest_free_trend(device) if self.history else 0.0
         rep = Report(
             device,
@@ -227,6 +228,7 @@ class Watcher:
             stalls=stalls,
             growth=growth,
             pools=pools,
+            regions=regions,
         )
         self.reports.append(rep)
         return rep

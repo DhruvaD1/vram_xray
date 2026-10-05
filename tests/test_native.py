@@ -60,3 +60,19 @@ def test_graph_private_pools_are_attributed(tmp_path):
     held = int(out.split("BYTES ")[1].split()[0])
     assert after >= 1 and held > 0, "the captured graph should hold memory in its own pool"
     assert "REPORT_LINE True" in out
+
+
+@pytest.mark.gpu
+def test_regions_attribute_memory_to_a_phase(tmp_path):
+    proc = run_script("regions.py", cwd=tmp_path)
+    out = _out(proc)
+    assert proc.returncode == 0, quiet(out)[-2000:]
+    found = {
+        line.split()[1]: int(line.split()[2])
+        for line in out.splitlines()
+        if line.startswith("REGION")
+    }
+    assert {"forward", "backward", "optimizer"} <= set(found), found
+    # the optimizer keeps its state between steps, so it should hold the most
+    assert found["optimizer"] > found["forward"]
+    assert "IN_REPORT True" in out

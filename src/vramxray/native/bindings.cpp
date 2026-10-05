@@ -96,6 +96,18 @@ py::list mirror_site_history() {
   return out;
 }
 
+py::list mirror_regions(int device) {
+  py::list out;
+  for (const auto& r : vramxray::mirror_regions(device)) {
+    py::dict d;
+    d["name"] = r.name;
+    d["bytes"] = r.bytes;
+    d["blocks"] = r.blocks;
+    out.append(d);
+  }
+  return out;
+}
+
 py::list mirror_pools(int device) {
   py::list out;
   for (const auto& p : vramxray::mirror_pools(device)) {
@@ -143,6 +155,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("top") = 4096, "record one sample of the live blocks, names unresolved");
   m.def("mirror_site_history", &mirror_site_history,
         "resolve the recorded samples. Runs Python, so call it from the main thread");
+  m.def("region_begin", &vramxray::region_begin, py::arg("name"),
+        "open a region, returns the id to hand back to region_end");
+  m.def("region_end", &vramxray::region_end, py::arg("previous"));
+  m.def("mirror_regions", &mirror_regions, py::arg("device") = 0,
+        "live bytes per region");
   m.def("mirror_pools", &mirror_pools, py::arg("device") = 0,
         "live bytes held by each CUDA graph private pool");
   // seeding only needs the shape of what is already there, never a stack

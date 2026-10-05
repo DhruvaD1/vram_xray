@@ -201,6 +201,44 @@ def cmd_merge(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_diff(a: argparse.Namespace) -> int:
+    """What changed between two reports, for when it worked yesterday."""
+    from .snapshot import fmt_bytes as b
+
+    before, after = (json.load(open(p)) for p in (a.before, a.after))
+
+    def sites(doc) -> dict[str, int]:
+        return {s["where"]: s["bytes"] for s in (doc.get("explanation") or {}).get("sites", [])}
+
+    def libs(doc) -> dict[str, int]:
+        return dict((doc.get("accounting") or {}).get("libs") or {})
+
+    for title, old, new in (
+        ("call site", sites(before), sites(after)),
+        ("library", libs(before), libs(after)),
+    ):
+        rows = []
+        for key in set(old) | set(new):
+            delta = new.get(key, 0) - old.get(key, 0)
+            if abs(delta) >= 1 << 20:
+                rows.append((delta, key, old.get(key, 0), new.get(key, 0)))
+        if not rows:
+            continue
+        rows.sort(key=lambda r: -abs(r[0]))
+        print(f"\n{title} changes:")
+        for delta, key, was, now in rows[:12]:
+            moved = ("+" if delta > 0 else "-") + b(abs(delta))
+            print(f"  {moved:>11}   {b(was):>10} -> {b(now):<10}  {key}")
+
+    for name, path in (("before", a.before), ("after", a.after)):
+        doc = before if name == "before" else after
+        acc = doc.get("accounting") or {}
+        ex = doc.get("explanation") or {}
+        print(f"\n{name:7} {path}")
+        print(f"        reserved {b(acc.get('torch_reserved'))}  verdict {ex.get('verdict', '-')}")
+    return 0
+
+
 def cmd_run(a: argparse.Namespace) -> int:
     import runpy
 
@@ -240,6 +278,10 @@ def main(argv: list[str] | None = None) -> int:
     mg = sub.add_parser("merge", help="one table across per-rank OOM report JSON files")
     mg.add_argument("reports", nargs="+")
     mg.set_defaults(fn=cmd_merge)
+    df = sub.add_parser("diff", help="what changed between two report json files")
+    df.add_argument("before")
+    df.add_argument("after")
+    df.set_defaults(fn=cmd_diff)
     a = p.parse_args(argv)
     return a.fn(a)
 

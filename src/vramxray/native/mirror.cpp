@@ -1,6 +1,7 @@
 #include "mirror.h"
 
 #include <algorithm>
+#include <atomic>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -28,8 +29,12 @@ struct Live {
   double t = 0;
   uint64_t pool0 = 0;
   uint64_t pool1 = 0;
+  int32_t region = 0;
   std::shared_ptr<c10::GatheredContext> ctx;
 };
+
+std::atomic<int32_t> g_region{0};
+std::vector<std::string> g_region_names{""};
 
 struct Seg {
   uint64_t base = 0;
@@ -111,7 +116,8 @@ void mirror_on_trace(
     case TA_ALLOC: {
       Seg* s = segment_holding(segs, addr);
       if (!s) return;  // an allocation we never saw the segment for, so skip it
-      Live blk{size, now_s(), pool0, pool1, std::move(context)};
+      Live blk{size, now_s(), pool0, pool1, g_region.load(std::memory_order_relaxed),
+                std::move(context)};
       auto [it, fresh] = s->live.emplace(addr, blk);
       if (fresh) {
         s->live_bytes += size;
@@ -291,6 +297,47 @@ std::vector<SiteSample> mirror_site_history() {
   for (auto& s : out) g_resolved.push_back(s);
   while (g_resolved.size() > kMaxResolved) g_resolved.pop_front();
   return {g_resolved.begin(), g_resolved.end()};
+}
+
+int32_t region_begin(const std::string& name) {
+  int32_t id;
+  {
+    std::lock_guard<std::mutex> g(g_mirror_mu);
+    auto it = std::find(g_region_names.begin(), g_region_names.end(), name);
+    if (it != g_region_names.end()) {
+      id = static_cast<int32_t>(it - g_region_names.begin());
+    } else {
+      id = static_cast<int32_t>(g_region_names.size());
+      g_region_names.push_back(name);
+    }
+  }
+  return g_region.exchange(id, std::memory_order_relaxed);
+}
+
+void region_end(int32_t previous) { g_region.store(previous, std::memory_order_relaxed); }
+
+std::vector<RegionBytes> mirror_regions(int32_t device) {
+  std::lock_guard<std::mutex> g(g_mirror_mu);
+  auto it = g_devices.find(device);
+  if (it == g_devices.end()) return {};
+  std::map<int32_t, RegionBytes> totals;
+  for (const auto& [base, s] : it->second)
+    for (const auto& [addr, blk] : s.live) {
+      if (blk.region == 0) continue;
+      auto& e = totals[blk.region];
+      e.bytes += blk.size;
+      e.blocks++;
+    }
+  std::vector<RegionBytes> out;
+  out.reserve(totals.size());
+  for (auto& [id, v] : totals) {
+    v.name = (size_t)id < g_region_names.size() ? g_region_names[id] : "?";
+    out.push_back(v);
+  }
+  std::sort(out.begin(), out.end(), [](const RegionBytes& a, const RegionBytes& b) {
+    return a.bytes > b.bytes;
+  });
+  return out;
 }
 
 std::vector<PoolBytes> mirror_pools(int32_t device) {

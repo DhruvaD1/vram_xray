@@ -26,6 +26,7 @@ class Report:
     stalls: dict[str, tuple[int, int]] = field(default_factory=dict)  # library -> (ns, calls)
     growth: list[Growth] = field(default_factory=list)  # call sites whose memory keeps climbing
     pools: list[dict] = field(default_factory=list)  # memory held inside CUDA graph private pools
+    regions: list[dict] = field(default_factory=list)
 
     def __str__(self) -> str:
         return render(self)
@@ -60,6 +61,7 @@ class Report:
             "stalls": {k: {"ns": ns, "calls": n} for k, (ns, n) in self.stalls.items()},
             "growth": [vars(g) for g in self.growth],
             "graph_pools": self.pools,
+            "regions": self.regions,
             "suggestions": [(s.text, s.recovers) for s in self.suggestions],
         }
 
@@ -73,6 +75,7 @@ class Report:
             acc=self.accounting,
             rows=rows or [],
             suggestions=self.suggestions,
+            regions=self.regions,
             title=f"vramxray cuda:{self.device}",
         )
 
@@ -213,6 +216,13 @@ def render(r: Report) -> str:
             lines.append(
                 f"      {b(g.bytes_now):>10}  now, up {b(g.bytes_per_minute)}/min "
                 f"over {g.over}  {g.where}"
+            )
+    if r.regions:
+        lines.append("    live memory by region:")
+        for g in r.regions[:6]:
+            share = 100 * g["bytes"] / max(ex.live, 1)
+            lines.append(
+                f"      {b(g['bytes']):>10}  {share:4.0f}%  {g['blocks']:5d} blocks  {g['name']}"
             )
     if ex.sites and ex.verdict != "fragmentation":
         lines.append(f"    live memory ({b(ex.live)}) by call site:")

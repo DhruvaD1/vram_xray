@@ -257,11 +257,24 @@ def _sites(ex: Explanation) -> str:
     return f"<table>{rows}</table>"
 
 
+def _regions(regions: list[dict], live: int) -> str:
+    top = max((r["bytes"] for r in regions), default=1)
+    rows = "".join(
+        f'<tr><td class="n">{fmt_bytes(r["bytes"])}</td>'
+        f'<td class="g"><div class="bar" style="width:{100 * r["bytes"] / top:.1f}%"></div></td>'
+        f"<td>{_e(r['name'])}</td>"
+        f'<td class="n note">{100 * r["bytes"] / max(live, 1):.0f}%</td></tr>'
+        for r in regions
+    )
+    return f"<table>{rows}</table>"
+
+
 def render(
     ex: Explanation,
     acc: Accounting | None = None,
     rows: list | None = None,
     suggestions: list | None = None,
+    regions: list[dict] | None = None,
     title: str = "vramxray",
 ) -> str:
     pins = {p.block.address for p in ex.pins[:6]}
@@ -303,6 +316,8 @@ def render(
         '<span><i style="background:var(--hole-big)"></i>free and big enough</span></div>'
     )
     blocks.append("".join(_strip(s, pins, ex.request) for s in drawn) + more)
+    if regions:
+        blocks.append(f"<h2>Live memory by region</h2>{_regions(regions, ex.live)}")
     sites = _sites(ex)
     if sites:
         blocks.append(f"<h2>Live memory by call site</h2>{sites}")

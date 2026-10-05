@@ -52,6 +52,12 @@ struct SiteBytes {
 };
 
 // memory held by a CUDA graph's private pool, which never comes back to the general pool
+struct RegionBytes {
+  std::string name;
+  uint64_t bytes;
+  uint32_t blocks;
+};
+
 struct PoolBytes {
   uint64_t id0;
   uint64_t id1;
@@ -84,6 +90,12 @@ struct SiteSample {
 void mirror_sample_sites(int32_t device, size_t top = 4096);
 std::vector<SiteSample> mirror_site_history();  // resolves names, call it from the main thread
 std::vector<PoolBytes> mirror_pools(int32_t device);
+
+// Regions are process wide rather than per thread, so that memory the autograd thread allocates
+// during a backward lands in the region the main thread opened around it.
+int32_t region_begin(const std::string& name);
+void region_end(int32_t previous);
+std::vector<RegionBytes> mirror_regions(int32_t device);
 
 // old_seconds decides what counts as long lived. Memory still held from early in a run is what
 // a leak looks like, and it costs nothing to measure because the blocks are already walked.
